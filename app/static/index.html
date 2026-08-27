@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Enterprise Research Agent</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 fill=%22%23090c0b%22/><text x=%226%22 y=%2222%22 fill=%22%23c7ff52%22 font-size=%2214%22>ER</text></svg>" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">ER</div>
+      <div>
+        <h1>Enterprise Research Agent</h1>
+        <p>Traceable multi-source research workspace</p>
+      </div>
+      <span class="demo-badge">DEMO · STUB TOOLS</span>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel sidebar">
+        <div class="panel-heading">
+          <div>
+            <span class="eyebrow">Workspace</span>
+            <h2>Conversations</h2>
+          </div>
+          <button id="new-chat" class="icon-button" aria-label="New conversation">＋</button>
+        </div>
+        <div id="conversation-list" class="conversation-list"></div>
+        <div class="sidebar-footer">
+          <div class="status-dot"></div>
+          <div><strong>Local demo</strong><span>In-memory state</span></div>
+        </div>
+      </aside>
+
+      <section class="panel chat-panel">
+        <div class="notice">
+          <strong>Deterministic demo mode</strong>
+          <span>All external tools return fixed placeholder content. No network, database, or code execution occurs.</span>
+        </div>
+        <div id="messages" class="messages" aria-live="polite">
+          <div class="empty-state">
+            <span class="empty-icon">⌁</span>
+            <h2>Start a traceable research run</h2>
+            <p>Ask a question that combines public research, internal policy, and procurement data.</p>
+            <button class="prompt-chip" data-prompt="调研 NVIDIA 最近一季度 AI 业务表现，并结合内部 GPU 采购数据给出采购建议。">
+              Try the procurement research demo
+            </button>
+          </div>
+        </div>
+        <form id="chat-form" class="composer">
+          <textarea id="query" rows="1" maxlength="10000" placeholder="Ask a research question…" required></textarea>
+          <div class="composer-meta">
+            <span>Enter to send · Shift+Enter for a new line</span>
+            <button id="send" type="submit">Run research <span>↗</span></button>
+          </div>
+        </form>
+      </section>
+
+      <aside class="panel inspector">
+        <div class="inspector-tabs" role="tablist">
+          <button class="tab active" data-tab="trace">Trace</button>
+          <button class="tab" data-tab="sources">Sources <span id="source-count">0</span></button>
+        </div>
+        <div id="trace-pane" class="inspector-pane active">
+          <div id="run-summary" class="run-summary muted">No active run</div>
+          <div id="trace-list" class="trace-list"></div>
+        </div>
+        <div id="sources-pane" class="inspector-pane">
+          <div id="source-list" class="source-list"></div>
+        </div>
+      </aside>
+    </main>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

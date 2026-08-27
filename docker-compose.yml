@@ -1,0 +1,17 @@
+services:
+  agent:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: demo
+      MAX_STEPS: 8
+      RUN_TIMEOUT_SECONDS: 30
+      TOOL_TIMEOUT_SECONDS: 5
+      MAX_PARALLEL_TOOLS: 4
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
