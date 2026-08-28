@@ -42,3 +42,12 @@ def test_unknown_conversation_returns_404() -> None:
     )
 
     assert response.status_code == 404
+
+
+def test_run_events_can_be_replayed_after_a_sequence() -> None:
+    created = client.post("/api/chat", json={"query": "research market"}).json()
+    events = client.get(f"/api/runs/{created['run']['run_id']}/events?after_sequence=1")
+
+    assert events.status_code == 200
+    assert events.json()[0]["sequence"] == 2
+    assert events.json()[-1]["event"] == "run_completed"

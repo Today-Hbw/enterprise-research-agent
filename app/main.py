@@ -292,6 +292,46 @@ async def get_run(
     return run
 
 
+@app.get("/api/runs/{run_id}/events", response_model=list[StreamEvent])
+async def replay_run_events(
+    run_id: str,
+    after_sequence: int = 0,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_principal_ids: str | None = Header(default=None, alias="X-Principal-Ids"),
+) -> list[StreamEvent]:
+    access_context = access_context_from_headers(x_tenant_id, x_principal_ids)
+    run = await store.get_run(run_id, access_context.tenant_id, access_context.principal_ids)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    events = [
+        StreamEvent(event="run_started", sequence=1, run_id=run.run_id, data={"model": run.model})
+    ]
+    for trace in run.trace:
+        sequence = len(events) + 1
+        event = "agent_decision" if trace.kind == "agent_decision" else "tool_completed"
+        events.append(
+            StreamEvent(
+                event=event,
+                sequence=sequence,
+                run_id=run.run_id,
+                data={
+                    "summary": trace.summary,
+                    "tool_name": trace.tool_name,
+                    "status": trace.status,
+                },
+            )
+        )
+    events.append(
+        StreamEvent(
+            event="run_completed" if run.status.value == "completed" else "run_failed",
+            sequence=len(events) + 1,
+            run_id=run.run_id,
+            data={"run": run.model_dump(mode="json")},
+        )
+    )
+    return [event for event in events if event.sequence > after_sequence]
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
