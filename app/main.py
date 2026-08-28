@@ -68,6 +68,8 @@ knowledge_service = KnowledgeService(
     chunk_overlap=settings.knowledge_chunk_overlap,
     ranking=settings.knowledge_ranking,
     hybrid_rrf_k=settings.knowledge_hybrid_rrf_k,
+    reranker=settings.knowledge_reranker,
+    rerank_candidate_k=settings.knowledge_rerank_candidate_k,
 )
 web_resources: list[BraveSearchBackend | SafeHttpFetcher] = []
 web_search_tool: WebSearchTool | None = None

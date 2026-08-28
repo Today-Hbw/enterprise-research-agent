@@ -79,6 +79,8 @@ class KnowledgeSearchTool(BaseTool):
             success=True,
             summary=summary,
             data={
+                "ranking": self._service.ranking,
+                "reranker": self._service.reranker,
                 "matches": [
                     {
                         "document_id": match.document_id,

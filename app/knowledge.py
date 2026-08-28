@@ -102,6 +102,28 @@ class DeterministicEmbedder:
         return vector
 
 
+class TokenOverlapReranker:
+    """Deterministic local reranker for development and offline deployments."""
+
+    _token_pattern = DeterministicEmbedder._token_pattern
+
+    def rerank(self, query: str, matches: list[KnowledgeMatch]) -> list[KnowledgeMatch]:
+        query_tokens = set(self._token_pattern.findall(query.lower()))
+        if not query_tokens:
+            return matches
+        reranked = []
+        for match in matches:
+            title_tokens = set(self._token_pattern.findall(match.title.lower()))
+            content_tokens = set(self._token_pattern.findall(match.content.lower()))
+            overlap = sum(
+                (2 if token in title_tokens else 0) + (1 if token in content_tokens else 0)
+                for token in query_tokens
+            )
+            reranked.append(replace(match, score=overlap + (match.score / 1_000)))
+        reranked.sort(key=lambda match: (-match.score, match.document_id, match.chunk_id))
+        return reranked
+
+
 class KnowledgeBackend(ABC):
     @abstractmethod
     async def upsert(self, chunks: list[KnowledgeChunk]) -> None:
@@ -397,6 +419,8 @@ class KnowledgeService:
         chunk_overlap: int = 120,
         ranking: Literal["semantic", "hybrid"] = "semantic",
         hybrid_rrf_k: int = 60,
+        reranker: Literal["none", "token_overlap"] = "none",
+        rerank_candidate_k: int = 30,
     ) -> None:
         if chunk_size < 32:
             raise ValueError("Chunk size must be at least 32 characters")
@@ -410,6 +434,9 @@ class KnowledgeService:
         self.chunk_overlap = chunk_overlap
         self.ranking = ranking
         self.hybrid_rrf_k = hybrid_rrf_k
+        self.reranker = reranker
+        self.rerank_candidate_k = rerank_candidate_k
+        self._token_overlap_reranker = TokenOverlapReranker()
 
     async def index_document(
         self, *, tenant_id: str, document: KnowledgeDocumentInput
@@ -453,27 +480,36 @@ class KnowledgeService:
     ) -> list[KnowledgeMatch]:
         vector = self.embedder.embed(query)
         bounded_top_k = max(1, min(top_k, 10))
+        candidate_top_k = (
+            max(bounded_top_k, self.rerank_candidate_k)
+            if self.reranker == "token_overlap"
+            else bounded_top_k
+        )
         if self.ranking == "hybrid":
             if not self.backend.supports_hybrid_search:
                 raise KnowledgeBackendError(
                     "Hybrid ranking is currently supported only by the in-memory backend"
                 )
-            return await self.backend.search_hybrid(
+            matches = await self.backend.search_hybrid(
                 query=query,
                 vector=vector,
                 tenant_id=tenant_id,
                 principal_ids=principal_ids,
                 knowledge_base_id=knowledge_base_id,
-                top_k=bounded_top_k,
+                top_k=candidate_top_k,
                 rrf_k=self.hybrid_rrf_k,
             )
-        return await self.backend.search(
-            vector=vector,
-            tenant_id=tenant_id,
-            principal_ids=principal_ids,
-            knowledge_base_id=knowledge_base_id,
-            top_k=bounded_top_k,
-        )
+        else:
+            matches = await self.backend.search(
+                vector=vector,
+                tenant_id=tenant_id,
+                principal_ids=principal_ids,
+                knowledge_base_id=knowledge_base_id,
+                top_k=candidate_top_k,
+            )
+        if self.reranker == "token_overlap":
+            matches = self._token_overlap_reranker.rerank(query, matches)
+        return matches[:bounded_top_k]
 
     async def aclose(self) -> None:
         await self.backend.aclose()

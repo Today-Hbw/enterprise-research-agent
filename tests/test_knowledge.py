@@ -197,3 +197,41 @@ async def test_hybrid_ranking_rejects_qdrant_until_lexical_index_is_configured()
                 knowledge_base_id=None,
                 top_k=1,
             )
+
+
+@pytest.mark.asyncio
+async def test_token_overlap_reranker_boosts_matching_title_after_retrieval() -> None:
+    service = KnowledgeService(
+        backend=InMemoryKnowledgeBackend(),
+        embedder=DeterministicEmbedder(dimensions=64),
+        chunk_size=80,
+        chunk_overlap=10,
+        reranker="token_overlap",
+        rerank_candidate_k=2,
+    )
+    await service.index_document(
+        tenant_id="tenant-a",
+        document=KnowledgeDocumentInput(
+            title="Compliance escalation guide",
+            content="This internal note describes the process.",
+            public=True,
+        ),
+    )
+    await service.index_document(
+        tenant_id="tenant-a",
+        document=KnowledgeDocumentInput(
+            title="General operational note",
+            content="This internal note describes the process.",
+            public=True,
+        ),
+    )
+
+    matches = await service.search(
+        query="compliance",
+        tenant_id="tenant-a",
+        principal_ids=set(),
+        knowledge_base_id=None,
+        top_k=1,
+    )
+
+    assert [match.title for match in matches] == ["Compliance escalation guide"]
