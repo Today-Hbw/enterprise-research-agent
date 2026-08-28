@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     browser_allowed_hosts: str = ""
     browser_timeout_seconds: float = Field(default=15, gt=0, le=60)
 
+    mcp_servers_json: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -77,6 +77,7 @@ def build_tool_registry(
     execute_sql_tool: BaseTool | None = None,
     python_execute_tool: BaseTool | None = None,
     browser_tool: BaseTool | None = None,
+    mcp_invoke_tool: BaseTool | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     common_query_schema = {
@@ -203,7 +204,8 @@ def build_tool_registry(
             timeout_seconds=timeout_seconds,
             permission=ToolPermission.HIGH,
         ),
-        FixedResultTool(
+        mcp_invoke_tool
+        or FixedResultTool(
             name="mcp_invoke",
             description="Discover and invoke an external MCP tool (deterministic stub).",
             input_schema={

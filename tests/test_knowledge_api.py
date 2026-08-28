@@ -49,9 +49,9 @@ def test_admin_ingestion_to_authorized_chat_citation(monkeypatch) -> None:
     assert marker in knowledge_sources[0]["content_snippet"]
     tool_catalog = {tool["name"]: tool for tool in tools.json()}
     assert tool_catalog["knowledge_search"]["is_stub"] is False
-    assert all(
-        spec["is_stub"] is True for name, spec in tool_catalog.items() if name != "knowledge_search"
-    )
+    assert tool_catalog["mcp_invoke"]["is_stub"] is False
+    assert tool_catalog["web_search"]["is_stub"] is True
+    assert tool_catalog["browser"]["is_stub"] is True
 
 
 def test_ingestion_rejects_missing_or_invalid_admin_token(monkeypatch) -> None:

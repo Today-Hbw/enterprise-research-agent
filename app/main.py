@@ -31,6 +31,7 @@ from app.models import (
 from app.store import store
 from app.tools.browser import PlaywrightBrowserTool
 from app.tools.knowledge import KnowledgeSearchTool
+from app.tools.mcp import McpInvokeTool, load_mcp_catalog
 from app.tools.python_worker import IsolatedPythonTool
 from app.tools.sql import ExecuteSqlTool, PostgresBackend, SchemaSearchTool
 from app.tools.stubs import build_tool_registry
@@ -61,6 +62,9 @@ schema_search_tool: SchemaSearchTool | None = None
 execute_sql_tool: ExecuteSqlTool | None = None
 python_execute_tool: IsolatedPythonTool | None = None
 browser_tool: PlaywrightBrowserTool | None = None
+mcp_invoke_tool = McpInvokeTool(
+    load_mcp_catalog(settings.mcp_servers_json), settings.tool_timeout_seconds
+)
 if settings.browser_backend == "playwright":
     browser_tool = PlaywrightBrowserTool(
         set(settings.browser_allowed_hosts.split(",")), settings.browser_timeout_seconds
@@ -119,6 +123,7 @@ registry = build_tool_registry(
     execute_sql_tool=execute_sql_tool,
     python_execute_tool=python_execute_tool,
     browser_tool=browser_tool,
+    mcp_invoke_tool=mcp_invoke_tool,
 )
 runtime = AgentRuntime(
     settings=settings,
