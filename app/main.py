@@ -133,6 +133,7 @@ if settings.http_fetch_backend == "safe":
     )
 registry = build_tool_registry(
     settings.tool_timeout_seconds,
+    max_permission=settings.tool_max_permission,
     knowledge_tool=KnowledgeSearchTool(
         service=knowledge_service,
         timeout_seconds=settings.tool_timeout_seconds,
@@ -201,6 +202,7 @@ async def health() -> dict[str, object]:
         "sql_backend": settings.sql_backend,
         "python_backend": settings.python_backend,
         "browser_backend": settings.browser_backend,
+        "tool_max_permission": settings.tool_max_permission,
         "state_backend": settings.state_backend,
     }
 

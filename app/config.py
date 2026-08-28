@@ -4,6 +4,8 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.models import ToolPermission
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -13,6 +15,7 @@ class Settings(BaseSettings):
     max_steps: int = Field(default=8, ge=1, le=32)
     run_timeout_seconds: float = Field(default=30, gt=0, le=300)
     tool_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    tool_max_permission: ToolPermission = ToolPermission.HIGH
     max_parallel_tools: int = Field(default=4, ge=1, le=16)
     llm_provider: Literal["deterministic", "openai"] = "deterministic"
     openai_api_key: SecretStr | None = None

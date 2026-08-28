@@ -78,8 +78,9 @@ def build_tool_registry(
     python_execute_tool: BaseTool | None = None,
     browser_tool: BaseTool | None = None,
     mcp_invoke_tool: BaseTool | None = None,
+    max_permission: ToolPermission = ToolPermission.HIGH,
 ) -> ToolRegistry:
-    registry = ToolRegistry()
+    registry = ToolRegistry(max_permission=max_permission)
     common_query_schema = {
         "type": "object",
         "properties": {"query": {"type": "string"}},
@@ -227,5 +228,7 @@ def build_tool_registry(
     return registry
 
 
-def build_stub_registry(timeout_seconds: float) -> ToolRegistry:
-    return build_tool_registry(timeout_seconds)
+def build_stub_registry(
+    timeout_seconds: float, max_permission: ToolPermission = ToolPermission.HIGH
+) -> ToolRegistry:
+    return build_tool_registry(timeout_seconds, max_permission=max_permission)

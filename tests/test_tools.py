@@ -1,6 +1,6 @@
 import pytest
 
-from app.models import ToolCall
+from app.models import ToolCall, ToolPermission
 from app.tools.stubs import build_stub_registry
 
 
@@ -31,3 +31,29 @@ async def test_sql_stub_rejects_mutation() -> None:
 
     assert result.success is False
     assert "SELECT" in result.summary
+
+
+@pytest.mark.asyncio
+async def test_registry_rejects_tools_above_configured_permission_ceiling() -> None:
+    registry = build_stub_registry(timeout_seconds=1, max_permission=ToolPermission.LOW)
+
+    assert {spec.name for spec in registry.specs()} == {
+        "knowledge_search",
+        "web_search",
+        "http_fetch",
+        "mcp_invoke",
+    }
+
+    result = await registry.execute(ToolCall(name="browser", arguments={"task": "export"}))
+
+    assert result.success is False
+    assert result.error == "Tool permission high exceeds configured maximum low."
+
+
+@pytest.mark.asyncio
+async def test_registry_allows_tools_at_configured_permission_ceiling() -> None:
+    registry = build_stub_registry(timeout_seconds=1, max_permission=ToolPermission.LOW)
+
+    result = await registry.execute(ToolCall(name="web_search", arguments={"query": "market"}))
+
+    assert result.success is True

@@ -199,7 +199,7 @@ ruff check .
 - SQL remains stubbed by default; the PostgreSQL backend requires explicit configuration, AST validation, a read-only transaction, timeout, schema allowlist, row cap, and non-sensitive audit metadata.
 - Python is stubbed by default. The optional isolated mode supports only bounded expressions, not arbitrary Python packages or scripts; OS-level resource caps remain a deployment hardening follow-up.
 - HTTP and browser tools never make network requests.
-- High-risk browser behavior is labeled `high` permission but has no approval workflow yet.
+- Tool execution has a server-side `TOOL_MAX_PERMISSION` ceiling (`high` by default); calls above it are rejected and retained in the run trace. High-risk browser behavior still has no approval workflow.
 - The OpenAI API key is read only from configuration and is never included in API responses, traces, or logs.
 - State is process-local and disappears on restart.
 - Authentication, tenant provisioning, durable audit logs, and production rate limiting are not implemented.
