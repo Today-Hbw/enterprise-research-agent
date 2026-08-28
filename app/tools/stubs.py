@@ -76,6 +76,7 @@ def build_tool_registry(
     schema_search_tool: BaseTool | None = None,
     execute_sql_tool: BaseTool | None = None,
     python_execute_tool: BaseTool | None = None,
+    browser_tool: BaseTool | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     common_query_schema = {
@@ -182,7 +183,8 @@ def build_tool_registry(
             timeout_seconds=timeout_seconds,
             permission=ToolPermission.MEDIUM,
         ),
-        FixedResultTool(
+        browser_tool
+        or FixedResultTool(
             name="browser",
             description="Interactive web fallback (deterministic stub; no browser launched).",
             input_schema={

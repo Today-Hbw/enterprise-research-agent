@@ -29,6 +29,7 @@ from app.models import (
     ToolSpec,
 )
 from app.store import store
+from app.tools.browser import PlaywrightBrowserTool
 from app.tools.knowledge import KnowledgeSearchTool
 from app.tools.python_worker import IsolatedPythonTool
 from app.tools.sql import ExecuteSqlTool, PostgresBackend, SchemaSearchTool
@@ -59,6 +60,11 @@ sql_backend: PostgresBackend | None = None
 schema_search_tool: SchemaSearchTool | None = None
 execute_sql_tool: ExecuteSqlTool | None = None
 python_execute_tool: IsolatedPythonTool | None = None
+browser_tool: PlaywrightBrowserTool | None = None
+if settings.browser_backend == "playwright":
+    browser_tool = PlaywrightBrowserTool(
+        set(settings.browser_allowed_hosts.split(",")), settings.browser_timeout_seconds
+    )
 if settings.python_backend == "isolated":
     python_execute_tool = IsolatedPythonTool(
         timeout_seconds=settings.python_worker_timeout_seconds,
@@ -112,6 +118,7 @@ registry = build_tool_registry(
     schema_search_tool=schema_search_tool,
     execute_sql_tool=execute_sql_tool,
     python_execute_tool=python_execute_tool,
+    browser_tool=browser_tool,
 )
 runtime = AgentRuntime(
     settings=settings,
@@ -163,6 +170,7 @@ async def health() -> dict[str, object]:
         "http_fetch_backend": settings.http_fetch_backend,
         "sql_backend": settings.sql_backend,
         "python_backend": settings.python_backend,
+        "browser_backend": settings.browser_backend,
     }
 
 
