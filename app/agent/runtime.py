@@ -7,6 +7,7 @@ from time import perf_counter
 from app.agent.provider import LLMProvider
 from app.config import Settings
 from app.models import (
+    AccessContext,
     Message,
     MessageRole,
     RunRecord,
@@ -36,14 +37,29 @@ class AgentRuntime:
         self.store = store
 
     async def stream(
-        self, *, query: str, conversation_id: str | None
+        self,
+        *,
+        query: str,
+        conversation_id: str | None,
+        access_context: AccessContext | None = None,
     ) -> AsyncIterator[StreamEvent]:
-        conversation = await self.store.get_or_create_conversation(conversation_id, query)
+        access_context = access_context or AccessContext(
+            tenant_id=self.settings.knowledge_default_tenant,
+            principal_ids={self.settings.knowledge_default_principal},
+        )
+        conversation = await self.store.get_or_create_conversation(
+            conversation_id,
+            query,
+            access_context.tenant_id,
+            access_context.principal_ids,
+        )
         user_message = Message(role=MessageRole.USER, content=query)
         await self.store.add_message(conversation.conversation_id, user_message)
 
         run = RunRecord(
             conversation_id=conversation.conversation_id,
+            tenant_id=access_context.tenant_id,
+            principal_ids=access_context.principal_ids,
             user_query=query,
             model=self.provider.name,
         )
@@ -64,7 +80,9 @@ class AgentRuntime:
 
         try:
             async with asyncio.timeout(self.settings.run_timeout_seconds):
-                async for emitted in self._execute(run, conversation.messages, event):
+                async for emitted in self._execute(
+                    run, conversation.messages, access_context, event
+                ):
                     yield emitted
         except TimeoutError:
             run.status = RunStatus.FAILED
@@ -98,6 +116,7 @@ class AgentRuntime:
         self,
         run: RunRecord,
         history: list[Message],
+        access_context: AccessContext,
         event_factory,
     ) -> AsyncIterator[StreamEvent]:
         prior_results: list[ToolResult] = []
@@ -155,7 +174,7 @@ class AgentRuntime:
                 )
 
             executed = await asyncio.gather(
-                *(self._execute_tool(call, semaphore) for call in fresh_calls)
+                *(self._execute_tool(call, semaphore, access_context) for call in fresh_calls)
             )
             for call, result, duration_ms in executed:
                 prior_results.append(result)
@@ -181,17 +200,20 @@ class AgentRuntime:
                     summary=result.summary,
                     sources=[source.model_dump(mode="json") for source in result.sources],
                     duration_ms=duration_ms,
-                    is_stub=True,
+                    is_stub=self.registry.is_stub(call.name),
                 )
 
         raise RuntimeError(f"Agent reached max_steps={self.settings.max_steps}")
 
     async def _execute_tool(
-        self, call: ToolCall, semaphore: asyncio.Semaphore
+        self,
+        call: ToolCall,
+        semaphore: asyncio.Semaphore,
+        access_context: AccessContext,
     ) -> tuple[ToolCall, ToolResult, int]:
         started = perf_counter()
         async with semaphore:
-            result = await self.registry.execute(call)
+            result = await self.registry.execute(call, access_context)
         return call, result, int((perf_counter() - started) * 1000)
 
     @staticmethod
@@ -199,6 +221,12 @@ class AgentRuntime:
         unique = {}
         for result in results:
             for source in result.sources:
-                key = (source.source_type, source.title, source.url, source.document_id)
+                key = (
+                    source.source_type,
+                    source.title,
+                    source.url,
+                    source.document_id,
+                    source.chunk_id,
+                )
                 unique.setdefault(key, source)
         return list(unique.values())

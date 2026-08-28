@@ -1,17 +1,36 @@
 services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-local-qdrant-key}
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
   agent:
     build: .
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      - qdrant
     environment:
       APP_ENV: demo
       MAX_STEPS: 8
       RUN_TIMEOUT_SECONDS: 30
       TOOL_TIMEOUT_SECONDS: 5
       MAX_PARALLEL_TOOLS: 4
+      KNOWLEDGE_BACKEND: qdrant
+      KNOWLEDGE_ADMIN_TOKEN: ${KNOWLEDGE_ADMIN_TOKEN:-local-demo-admin-token}
+      KNOWLEDGE_TRUST_ACCESS_HEADERS: "true"
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-local-qdrant-key}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 10s
       timeout: 3s
       retries: 3
 
+volumes:
+  qdrant_storage:

@@ -19,6 +19,30 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-5-mini", min_length=1)
     openai_base_url: str = Field(default="https://api.openai.com/v1", min_length=1)
     openai_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    knowledge_backend: Literal["memory", "qdrant"] = "memory"
+    knowledge_default_tenant: str = Field(default="demo", min_length=1, max_length=128)
+    knowledge_default_principal: str = Field(default="demo-user", min_length=1, max_length=128)
+    knowledge_admin_token: SecretStr | None = None
+    knowledge_trust_access_headers: bool = False
+    knowledge_embedding_dimensions: int = Field(default=256, ge=16, le=4096)
+    knowledge_chunk_size: int = Field(default=800, ge=32, le=20_000)
+    knowledge_chunk_overlap: int = Field(default=120, ge=0, le=10_000)
+    qdrant_url: str = Field(default="http://localhost:6333", min_length=1)
+    qdrant_api_key: SecretStr | None = None
+    qdrant_collection: str = Field(default="enterprise_knowledge", min_length=1)
+
+    web_search_backend: Literal["stub", "brave"] = "stub"
+    brave_search_api_key: SecretStr | None = None
+    brave_search_base_url: str = Field(
+        default="https://api.search.brave.com/res/v1/web/search", min_length=1
+    )
+    web_search_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    http_fetch_backend: Literal["stub", "safe"] = "stub"
+    http_allowed_hosts: str = ""
+    http_fetch_timeout_seconds: float = Field(default=10, gt=0, le=60)
+    http_fetch_max_bytes: int = Field(default=1_000_000, ge=1_024, le=10_000_000)
+    http_fetch_max_redirects: int = Field(default=3, ge=0, le=10)
+    http_fetch_allow_http: bool = False
 
 
 @lru_cache

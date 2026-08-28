@@ -1,6 +1,6 @@
 from typing import Any
 
-from app.models import Source, SourceType, ToolCall, ToolPermission, ToolResult
+from app.models import AccessContext, Source, SourceType, ToolCall, ToolPermission, ToolResult
 from app.tools.base import BaseTool
 from app.tools.registry import ToolRegistry
 
@@ -31,7 +31,10 @@ class FixedResultTool(BaseTool):
         self._source_title = source_title
         self._source_url = source_url
 
-    async def execute(self, call: ToolCall) -> ToolResult:
+    async def execute(
+        self, call: ToolCall, access_context: AccessContext | None = None
+    ) -> ToolResult:
+        del access_context
         source = Source(
             source_type=self._source_type,
             title=self._source_title,
@@ -50,7 +53,9 @@ class FixedResultTool(BaseTool):
 
 
 class SqlStubTool(FixedResultTool):
-    async def execute(self, call: ToolCall) -> ToolResult:
+    async def execute(
+        self, call: ToolCall, access_context: AccessContext | None = None
+    ) -> ToolResult:
         sql = str(call.arguments.get("sql", "")).strip()
         if not sql.lower().startswith("select"):
             return ToolResult(
@@ -60,10 +65,15 @@ class SqlStubTool(FixedResultTool):
                 summary="Only SELECT statements are allowed, including in stub mode.",
                 error="SQL validator rejected a non-SELECT statement",
             )
-        return await super().execute(call)
+        return await super().execute(call, access_context)
 
 
-def build_stub_registry(timeout_seconds: float) -> ToolRegistry:
+def build_tool_registry(
+    timeout_seconds: float,
+    knowledge_tool: BaseTool | None = None,
+    web_search_tool: BaseTool | None = None,
+    http_fetch_tool: BaseTool | None = None,
+) -> ToolRegistry:
     registry = ToolRegistry()
     common_query_schema = {
         "type": "object",
@@ -71,7 +81,8 @@ def build_stub_registry(timeout_seconds: float) -> ToolRegistry:
         "required": ["query"],
     }
     tools: list[BaseTool] = [
-        FixedResultTool(
+        knowledge_tool
+        or FixedResultTool(
             name="knowledge_search",
             description="Search internal enterprise knowledge (deterministic stub).",
             input_schema=common_query_schema,
@@ -82,7 +93,8 @@ def build_stub_registry(timeout_seconds: float) -> ToolRegistry:
             source_url=None,
             timeout_seconds=timeout_seconds,
         ),
-        FixedResultTool(
+        web_search_tool
+        or FixedResultTool(
             name="web_search",
             description="Discover public sources (deterministic stub).",
             input_schema=common_query_schema,
@@ -96,7 +108,8 @@ def build_stub_registry(timeout_seconds: float) -> ToolRegistry:
             source_url="https://example.com/demo-market-research",
             timeout_seconds=timeout_seconds,
         ),
-        FixedResultTool(
+        http_fetch_tool
+        or FixedResultTool(
             name="http_fetch",
             description="Fetch a known URL or API (deterministic stub; no network request).",
             input_schema={
@@ -202,3 +215,7 @@ def build_stub_registry(timeout_seconds: float) -> ToolRegistry:
     for tool in tools:
         registry.register(tool)
     return registry
+
+
+def build_stub_registry(timeout_seconds: float) -> ToolRegistry:
+    return build_tool_registry(timeout_seconds)

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-from app.models import ToolCall, ToolPermission, ToolResult, ToolSpec
+from app.models import AccessContext, ToolCall, ToolPermission, ToolResult, ToolSpec
 
 
 class BaseTool(ABC):
@@ -26,5 +26,7 @@ class BaseTool(ABC):
         )
 
     @abstractmethod
-    async def execute(self, call: ToolCall) -> ToolResult:
+    async def execute(
+        self, call: ToolCall, access_context: AccessContext | None = None
+    ) -> ToolResult:
         raise NotImplementedError

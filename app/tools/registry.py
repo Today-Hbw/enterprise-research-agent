@@ -1,6 +1,6 @@
 import asyncio
 
-from app.models import ToolCall, ToolResult, ToolSpec
+from app.models import AccessContext, ToolCall, ToolResult, ToolSpec
 from app.tools.base import BaseTool
 
 
@@ -16,7 +16,13 @@ class ToolRegistry:
     def specs(self) -> list[ToolSpec]:
         return [tool.spec for tool in self._tools.values()]
 
-    async def execute(self, call: ToolCall) -> ToolResult:
+    def is_stub(self, name: str) -> bool:
+        tool = self._tools.get(name)
+        return True if tool is None else tool.is_stub
+
+    async def execute(
+        self, call: ToolCall, access_context: AccessContext | None = None
+    ) -> ToolResult:
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult(
@@ -27,7 +33,9 @@ class ToolRegistry:
                 error=f"Unknown tool: {call.name}",
             )
         try:
-            return await asyncio.wait_for(tool.execute(call), timeout=tool.timeout_seconds)
+            return await asyncio.wait_for(
+                tool.execute(call, access_context), timeout=tool.timeout_seconds
+            )
         except TimeoutError:
             return ToolResult(
                 call_id=call.call_id,

@@ -56,8 +56,20 @@ class Source(BaseModel):
     title: str
     url: str | None = None
     document_id: str | None = None
+    chunk_id: str | None = None
+    knowledge_base_id: str | None = None
+    char_start: int | None = Field(default=None, ge=0)
+    char_end: int | None = Field(default=None, ge=0)
+    score: float | None = None
     retrieved_at: datetime = Field(default_factory=utc_now)
     content_snippet: str
+
+
+class AccessContext(BaseModel):
+    """Server-owned authorization context supplied outside the LLM tool schema."""
+
+    tenant_id: str = Field(min_length=1, max_length=128)
+    principal_ids: set[str] = Field(default_factory=set)
 
 
 class ToolSpec(BaseModel):
@@ -126,6 +138,8 @@ class RunMetrics(BaseModel):
 class RunRecord(BaseModel):
     run_id: str = Field(default_factory=lambda: new_id("run"))
     conversation_id: str
+    tenant_id: str = Field(default="demo", min_length=1, max_length=128)
+    principal_ids: set[str] = Field(default_factory=lambda: {"demo-user"})
     user_query: str
     model: str
     status: RunStatus = RunStatus.RUNNING
@@ -140,6 +154,8 @@ class RunRecord(BaseModel):
 
 class Conversation(BaseModel):
     conversation_id: str = Field(default_factory=lambda: new_id("conv"))
+    tenant_id: str = Field(default="demo", min_length=1, max_length=128)
+    principal_ids: set[str] = Field(default_factory=lambda: {"demo-user"})
     title: str
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
