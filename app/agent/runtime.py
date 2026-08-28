@@ -228,5 +228,13 @@ class AgentRuntime:
                     source.document_id,
                     source.chunk_id,
                 )
-                unique.setdefault(key, source)
-        return list(unique.values())
+                anchor = source.url or source.chunk_id or source.document_id or source.source_id
+                unique.setdefault(key, source.model_copy(update={"evidence_anchor": anchor}))
+        return sorted(
+            unique.values(),
+            key=lambda source: (
+                source.source_type.value,
+                source.evidence_anchor or "",
+                source.title,
+            ),
+        )

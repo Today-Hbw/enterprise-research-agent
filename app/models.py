@@ -64,6 +64,7 @@ class Source(BaseModel):
     score: float | None = None
     retrieved_at: datetime = Field(default_factory=utc_now)
     content_snippet: str
+    evidence_anchor: str | None = None
 
 
 class AccessContext(BaseModel):
