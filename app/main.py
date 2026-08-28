@@ -134,7 +134,9 @@ if settings.http_fetch_backend == "safe":
 registry = build_tool_registry(
     settings.tool_timeout_seconds,
     knowledge_tool=KnowledgeSearchTool(
-        service=knowledge_service, timeout_seconds=settings.tool_timeout_seconds
+        service=knowledge_service,
+        timeout_seconds=settings.tool_timeout_seconds,
+        allowed_metadata_keys=set(settings.knowledge_metadata_filter_keys.split(",")),
     ),
     web_search_tool=web_search_tool,
     http_fetch_tool=http_fetch_tool,

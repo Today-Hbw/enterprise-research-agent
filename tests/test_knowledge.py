@@ -117,6 +117,7 @@ async def test_qdrant_query_always_contains_server_side_access_filter() -> None:
             principal_ids={"alice", "analyst"},
             knowledge_base_id="policy",
             top_k=3,
+            metadata_filters={"region": "apac"},
         )
 
     query = requests[-1]
@@ -125,6 +126,7 @@ async def test_qdrant_query_always_contains_server_side_access_filter() -> None:
     assert {condition.get("key") for condition in must if "key" in condition} == {
         "tenant_id",
         "knowledge_base_id",
+        "metadata.region",
     }
     access_filter = next(condition for condition in must if "should" in condition)
     assert {condition["key"] for condition in access_filter["should"]} == {
@@ -235,3 +237,55 @@ async def test_token_overlap_reranker_boosts_matching_title_after_retrieval() ->
     )
 
     assert [match.title for match in matches] == ["Compliance escalation guide"]
+
+
+@pytest.mark.asyncio
+async def test_knowledge_metadata_filter_is_server_allowlisted() -> None:
+    service = build_service()
+    await service.index_document(
+        tenant_id="tenant-a",
+        document=KnowledgeDocumentInput(
+            title="APAC policy",
+            content="Quarterly controls apply.",
+            public=True,
+            metadata={"region": "apac", "classification": "internal"},
+        ),
+    )
+    await service.index_document(
+        tenant_id="tenant-a",
+        document=KnowledgeDocumentInput(
+            title="EU policy",
+            content="Quarterly controls apply.",
+            public=True,
+            metadata={"region": "eu", "classification": "internal"},
+        ),
+    )
+    tool = KnowledgeSearchTool(
+        service=service,
+        timeout_seconds=1,
+        allowed_metadata_keys={"region"},
+    )
+    context = AccessContext(tenant_id="tenant-a", principal_ids=set())
+
+    filtered = await tool.execute(
+        ToolCall(
+            name="knowledge_search",
+            arguments={"query": "quarterly controls", "metadata_filters": {"region": "apac"}},
+        ),
+        context,
+    )
+    rejected = await tool.execute(
+        ToolCall(
+            name="knowledge_search",
+            arguments={
+                "query": "quarterly controls",
+                "metadata_filters": {"classification": "internal"},
+            },
+        ),
+        context,
+    )
+
+    assert [source.title for source in filtered.sources] == ["APAC policy"]
+    assert filtered.data["metadata_filters"] == {"region": "apac"}
+    assert rejected.success is False
+    assert "not allowed" in rejected.summary

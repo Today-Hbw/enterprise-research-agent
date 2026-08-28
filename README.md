@@ -106,7 +106,7 @@ curl -X POST http://localhost:8000/api/knowledge/documents \
 
 Knowledge citations include `document_id`, `chunk_id`, `knowledge_base_id`, `char_start`, `char_end`, score, and the exact snippet. Character spans index the original submitted text.
 
-Set `KNOWLEDGE_RANKING=hybrid` with the in-memory backend to fuse semantic and title/content keyword rankings using Reciprocal Rank Fusion. `KNOWLEDGE_HYBRID_RRF_K` tunes the fusion constant (default `60`). Set `KNOWLEDGE_RERANKER=token_overlap` to re-rank the configured candidate pool deterministically by query overlap in title and content; it is disabled by default. Qdrant remains explicitly semantic-only until its sparse-vector/text-index path is configured.
+Set `KNOWLEDGE_RANKING=hybrid` with the in-memory backend to fuse semantic and title/content keyword rankings using Reciprocal Rank Fusion. `KNOWLEDGE_HYBRID_RRF_K` tunes the fusion constant (default `60`). Set `KNOWLEDGE_RERANKER=token_overlap` to re-rank the configured candidate pool deterministically by query overlap in title and content; it is disabled by default. Metadata can be attached at ingestion and filtered only through server-configured KNOWLEDGE_METADATA_FILTER_KEYS; empty configuration disables metadata filters. Qdrant remains explicitly semantic-only until its sparse-vector/text-index path is configured.
 
 To start the local stack with development defaults:
 

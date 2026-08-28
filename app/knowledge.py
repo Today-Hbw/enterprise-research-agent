@@ -25,6 +25,7 @@ class KnowledgeDocumentInput(BaseModel):
     allowed_principal_ids: list[PrincipalId] = Field(default_factory=list, max_length=100)
     public: bool = False
     source_url: AnyHttpUrl | None = None
+    metadata: dict[str, str] = Field(default_factory=dict, max_length=20)
 
 
 class IndexedKnowledgeDocument(BaseModel):
@@ -48,6 +49,8 @@ class KnowledgeChunk:
     allowed_principal_ids: frozenset[str]
     public: bool
     source_url: str | None
+
+    metadata: dict[str, str]
     vector: list[float]
 
     def payload(self) -> dict[str, Any]:
@@ -63,6 +66,7 @@ class KnowledgeChunk:
             "allowed_principal_ids": sorted(self.allowed_principal_ids),
             "public": self.public,
             "source_url": self.source_url,
+            "metadata": self.metadata,
         }
 
 
@@ -138,6 +142,7 @@ class KnowledgeBackend(ABC):
         principal_ids: set[str],
         knowledge_base_id: str | None,
         top_k: int,
+        metadata_filters: dict[str, str] | None = None,
     ) -> list[KnowledgeMatch]:
         raise NotImplementedError
 
@@ -155,6 +160,7 @@ class KnowledgeBackend(ABC):
         knowledge_base_id: str | None,
         top_k: int,
         rrf_k: int,
+        metadata_filters: dict[str, str] | None = None,
     ) -> list[KnowledgeMatch]:
         raise KnowledgeBackendError("Hybrid search is not supported by this backend")
 
@@ -184,12 +190,14 @@ class InMemoryKnowledgeBackend(KnowledgeBackend):
         principal_ids: set[str],
         knowledge_base_id: str | None,
         top_k: int,
+        metadata_filters: dict[str, str] | None = None,
     ) -> list[KnowledgeMatch]:
         candidates = self._authorized_matches(
             vector=vector,
             tenant_id=tenant_id,
             principal_ids=principal_ids,
             knowledge_base_id=knowledge_base_id,
+            metadata_filters=metadata_filters,
         )
         candidates.sort(key=lambda match: (-match.score, match.document_id, match.chunk_id))
         return candidates[:top_k]
@@ -204,12 +212,14 @@ class InMemoryKnowledgeBackend(KnowledgeBackend):
         knowledge_base_id: str | None,
         top_k: int,
         rrf_k: int,
+        metadata_filters: dict[str, str] | None = None,
     ) -> list[KnowledgeMatch]:
         semantic = self._authorized_matches(
             vector=vector,
             tenant_id=tenant_id,
             principal_ids=principal_ids,
             knowledge_base_id=knowledge_base_id,
+            metadata_filters=metadata_filters,
         )
         semantic.sort(key=lambda match: (-match.score, match.document_id, match.chunk_id))
         lexical = [(self._lexical_score(query, match), match) for match in semantic]
@@ -239,6 +249,7 @@ class InMemoryKnowledgeBackend(KnowledgeBackend):
         tenant_id: str,
         principal_ids: set[str],
         knowledge_base_id: str | None,
+        metadata_filters: dict[str, str] | None,
     ) -> list[KnowledgeMatch]:
         candidates: list[KnowledgeMatch] = []
         for chunk in self._chunks.values():
@@ -247,6 +258,10 @@ class InMemoryKnowledgeBackend(KnowledgeBackend):
             if knowledge_base_id and chunk.knowledge_base_id != knowledge_base_id:
                 continue
             if not chunk.public and not chunk.allowed_principal_ids.intersection(principal_ids):
+                continue
+            if metadata_filters and any(
+                chunk.metadata.get(key) != value for key, value in metadata_filters.items()
+            ):
                 continue
             score = sum(left * right for left, right in zip(vector, chunk.vector, strict=True))
             candidates.append(
@@ -317,6 +332,7 @@ class QdrantKnowledgeBackend(KnowledgeBackend):
         principal_ids: set[str],
         knowledge_base_id: str | None,
         top_k: int,
+        metadata_filters: dict[str, str] | None = None,
     ) -> list[KnowledgeMatch]:
         await self._ensure_collection()
         must: list[dict[str, Any]] = [
@@ -324,6 +340,8 @@ class QdrantKnowledgeBackend(KnowledgeBackend):
         ]
         if knowledge_base_id:
             must.append({"key": "knowledge_base_id", "match": {"value": knowledge_base_id}})
+        for key, value in (metadata_filters or {}).items():
+            must.append({"key": f"metadata.{key}", "match": {"value": value}})
         allowed: list[dict[str, Any]] = [
             {"key": "public", "match": {"value": True}},
         ]
@@ -457,6 +475,7 @@ class KnowledgeService:
                 allowed_principal_ids=frozenset(document.allowed_principal_ids),
                 public=document.public,
                 source_url=str(document.source_url) if document.source_url else None,
+                metadata=document.metadata,
                 vector=self.embedder.embed(document.content[start:end]),
             )
             for index, (start, end) in enumerate(spans)
@@ -477,6 +496,7 @@ class KnowledgeService:
         principal_ids: set[str],
         knowledge_base_id: str | None,
         top_k: int,
+        metadata_filters: dict[str, str] | None = None,
     ) -> list[KnowledgeMatch]:
         vector = self.embedder.embed(query)
         bounded_top_k = max(1, min(top_k, 10))
@@ -498,6 +518,7 @@ class KnowledgeService:
                 knowledge_base_id=knowledge_base_id,
                 top_k=candidate_top_k,
                 rrf_k=self.hybrid_rrf_k,
+                metadata_filters=metadata_filters or {},
             )
         else:
             matches = await self.backend.search(
@@ -506,6 +527,7 @@ class KnowledgeService:
                 principal_ids=principal_ids,
                 knowledge_base_id=knowledge_base_id,
                 top_k=candidate_top_k,
+                metadata_filters=metadata_filters or {},
             )
         if self.reranker == "token_overlap":
             matches = self._token_overlap_reranker.rerank(query, matches)
