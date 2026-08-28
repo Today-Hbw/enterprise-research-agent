@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     http_fetch_max_redirects: int = Field(default=3, ge=0, le=10)
     http_fetch_allow_http: bool = False
 
+    sql_backend: Literal["stub", "postgres"] = "stub"
+    postgres_dsn: SecretStr | None = None
+    postgres_allowed_schemas: str = Field(default="public", min_length=1)
+    postgres_query_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
+    postgres_max_rows: int = Field(default=500, ge=1, le=10_000)
+
 
 @lru_cache
 def get_settings() -> Settings:

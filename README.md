@@ -2,7 +2,7 @@
 
 A lightweight, traceable research agent based on the [PRD](https://app.notion.com/p/3c897d4ad24781f698eefce7533cc444). The current release includes controlled knowledge ingestion and retrieval while keeping the remaining external capabilities deterministic and offline.
 
-> Demo boundary: Knowledge Search is real by default. Web Search and HTTP Fetch can be explicitly enabled with server-side configuration; SQL, Python, Browser, and MCP remain fixed placeholder tools. The local deterministic embedding is intended for development, not production semantic quality.
+> Demo boundary: Knowledge Search is real by default. Web Search and HTTP Fetch can be explicitly enabled with server-side configuration; Python, Browser, and MCP remain fixed placeholder tools. SQL can be explicitly enabled with a read-only PostgreSQL configuration. The local deterministic embedding is intended for development, not production semantic quality.
 
 ## What works
 
@@ -12,7 +12,7 @@ A lightweight, traceable research agent based on the [PRD](https://app.notion.co
 - Unified tool registry, JSON schemas, permissions, results, and error boundaries
 - Replaceable LLM provider interface: deterministic offline planner or OpenAI Responses API
 - Real text ingestion, deterministic chunking, authorization filtering, and anchored citations
-- Optional Qdrant vector storage; seven remaining placeholder tools
+- Optional Qdrant vector storage; SQL is available as an explicitly configured read-only PostgreSQL tool, while three execution tools remain placeholders
 - In-memory conversations and run records
 - Source citations, explainable execution trace, run latency, decision count, and tool-call count
 - Responsive three-panel interface for conversations, chat, sources, and trace
@@ -28,7 +28,8 @@ flowchart LR
     RT --> REG[Tool Registry]
     REG --> KNOW[Knowledge Search]
     KNOW --> QDRANT[Memory or Qdrant]
-    REG --> STUB[7 Deterministic Stub Tools]
+    REG --> SQL[Optional Read-only PostgreSQL]
+    REG --> STUB[6 Deterministic Stub Tools]
     RT --> STORE[In-memory Store]
     STORE --> OUT[SSE + Answer + Sources + Trace]
 ```
@@ -125,6 +126,19 @@ docker compose up --build
 | `GET` | `/api/runs/{id}` | Read a traceable run |
 
 Example:
+### Read-only PostgreSQL schema retrieval and SQL
+
+SQL stays in `stub` mode unless configured. Enabling it replaces both `schema_search` and `execute_sql` with a PostgreSQL-backed implementation:
+
+```bash
+SQL_BACKEND=postgres
+POSTGRES_DSN=postgresql://research_readonly:replace-me@localhost:5432/research
+POSTGRES_ALLOWED_SCHEMAS=public,analytics
+POSTGRES_QUERY_TIMEOUT_MS=5000
+POSTGRES_MAX_ROWS=500
+```
+
+The configured database role must independently be read-only and limited to the approved schemas. Before execution, SQLGlot parses exactly one AST and rejects mutations, DDL, `SELECT INTO`, locking clauses, unapproved schemas, and unqualified tables when `public` is not permitted. Each query runs in a PostgreSQL read-only transaction with a local statement timeout, receives an enforced row cap, and creates an in-process audit event containing only a statement hash, tenant ID, row count, and truncation flag. This release intentionally does not persist audit events; durable audit storage remains part of the persistence milestone.
 ### Public Web Search and safe HTTP Fetch
 
 Both capabilities remain `stub` by default, so local development and offline tests do not make network requests. To enable Brave Search, obtain a server-side subscription token and set:
@@ -169,7 +183,7 @@ ruff check .
 - Ingestion requires a separate admin token and is disabled when the token is absent.
 - The deterministic local embedding supports offline tests but is not a substitute for a production embedding model.
 - Qdrant should use API-key/TLS controls and private networking outside local development.
-- SQL validates that a request begins with `SELECT`, even in demo mode.
+- SQL remains stubbed by default; the PostgreSQL backend requires explicit configuration, AST validation, a read-only transaction, timeout, schema allowlist, row cap, and non-sensitive audit metadata.
 - Python is never executed; the Python tool returns a fixed result.
 - HTTP and browser tools never make network requests.
 - High-risk browser behavior is labeled `high` permission but has no approval workflow yet.

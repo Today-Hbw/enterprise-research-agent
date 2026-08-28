@@ -73,6 +73,8 @@ def build_tool_registry(
     knowledge_tool: BaseTool | None = None,
     web_search_tool: BaseTool | None = None,
     http_fetch_tool: BaseTool | None = None,
+    schema_search_tool: BaseTool | None = None,
+    execute_sql_tool: BaseTool | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     common_query_schema = {
@@ -124,7 +126,8 @@ def build_tool_registry(
             source_url="https://example.com/demo-quarterly-summary",
             timeout_seconds=timeout_seconds,
         ),
-        FixedResultTool(
+        schema_search_tool
+        or FixedResultTool(
             name="schema_search",
             description="Find relevant database schema and relationships (deterministic stub).",
             input_schema=common_query_schema,
@@ -141,7 +144,8 @@ def build_tool_registry(
             timeout_seconds=timeout_seconds,
             permission=ToolPermission.MEDIUM,
         ),
-        SqlStubTool(
+        execute_sql_tool
+        or SqlStubTool(
             name="execute_sql",
             description="Execute validated read-only SQL (deterministic stub; no database access).",
             input_schema={

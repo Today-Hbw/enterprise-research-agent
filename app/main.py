@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.store import store
 from app.tools.knowledge import KnowledgeSearchTool
+from app.tools.sql import ExecuteSqlTool, PostgresBackend, SchemaSearchTool
 from app.tools.stubs import build_tool_registry
 from app.tools.web import BraveSearchBackend, HttpFetchTool, SafeHttpFetcher, WebSearchTool
 
@@ -53,6 +54,22 @@ knowledge_service = KnowledgeService(
 web_resources: list[BraveSearchBackend | SafeHttpFetcher] = []
 web_search_tool: WebSearchTool | None = None
 http_fetch_tool: HttpFetchTool | None = None
+sql_backend: PostgresBackend | None = None
+schema_search_tool: SchemaSearchTool | None = None
+execute_sql_tool: ExecuteSqlTool | None = None
+if settings.sql_backend == "postgres":
+    if settings.postgres_dsn is None:
+        raise RuntimeError("POSTGRES_DSN is required when SQL_BACKEND=postgres")
+    sql_backend = PostgresBackend(
+        dsn=settings.postgres_dsn.get_secret_value(),
+        allowed_schemas=frozenset(
+            item.strip() for item in settings.postgres_allowed_schemas.split(",") if item.strip()
+        ),
+        query_timeout_ms=settings.postgres_query_timeout_ms,
+        max_rows=settings.postgres_max_rows,
+    )
+    schema_search_tool = SchemaSearchTool(sql_backend, settings.tool_timeout_seconds)
+    execute_sql_tool = ExecuteSqlTool(sql_backend, settings.tool_timeout_seconds)
 if settings.web_search_backend == "brave":
     brave_api_key = (
         settings.brave_search_api_key.get_secret_value() if settings.brave_search_api_key else ""
@@ -85,6 +102,8 @@ registry = build_tool_registry(
     ),
     web_search_tool=web_search_tool,
     http_fetch_tool=http_fetch_tool,
+    schema_search_tool=schema_search_tool,
+    execute_sql_tool=execute_sql_tool,
 )
 runtime = AgentRuntime(
     settings=settings,
@@ -134,6 +153,7 @@ async def health() -> dict[str, object]:
         "knowledge_backend": settings.knowledge_backend,
         "web_search_backend": settings.web_search_backend,
         "http_fetch_backend": settings.http_fetch_backend,
+        "sql_backend": settings.sql_backend,
     }
 
 
