@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     knowledge_embedding_dimensions: int = Field(default=256, ge=16, le=4096)
     knowledge_chunk_size: int = Field(default=800, ge=32, le=20_000)
     knowledge_chunk_overlap: int = Field(default=120, ge=0, le=10_000)
+    knowledge_ranking: Literal["semantic", "hybrid"] = "semantic"
+    knowledge_hybrid_rrf_k: int = Field(default=60, ge=1, le=1_000)
     qdrant_url: str = Field(default="http://localhost:6333", min_length=1)
     qdrant_api_key: SecretStr | None = None
     qdrant_collection: str = Field(default="enterprise_knowledge", min_length=1)

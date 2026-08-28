@@ -106,6 +106,8 @@ curl -X POST http://localhost:8000/api/knowledge/documents \
 
 Knowledge citations include `document_id`, `chunk_id`, `knowledge_base_id`, `char_start`, `char_end`, score, and the exact snippet. Character spans index the original submitted text.
 
+Set `KNOWLEDGE_RANKING=hybrid` with the in-memory backend to fuse semantic and title/content keyword rankings using Reciprocal Rank Fusion. `KNOWLEDGE_HYBRID_RRF_K` tunes the fusion constant (default `60`). Qdrant remains explicitly semantic-only until its sparse-vector/text-index path is configured.
+
 To start the local stack with development defaults:
 
 ```bash

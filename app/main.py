@@ -66,6 +66,8 @@ knowledge_service = KnowledgeService(
     embedder=embedder,
     chunk_size=settings.knowledge_chunk_size,
     chunk_overlap=settings.knowledge_chunk_overlap,
+    ranking=settings.knowledge_ranking,
+    hybrid_rrf_k=settings.knowledge_hybrid_rrf_k,
 )
 web_resources: list[BraveSearchBackend | SafeHttpFetcher] = []
 web_search_tool: WebSearchTool | None = None

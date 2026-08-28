@@ -4,8 +4,8 @@ import hashlib
 import math
 import re
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Annotated, Any
+from dataclasses import dataclass, replace
+from typing import Annotated, Any, Literal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
@@ -119,13 +119,36 @@ class KnowledgeBackend(ABC):
     ) -> list[KnowledgeMatch]:
         raise NotImplementedError
 
+    @property
+    def supports_hybrid_search(self) -> bool:
+        return False
+
+    async def search_hybrid(
+        self,
+        *,
+        query: str,
+        vector: list[float],
+        tenant_id: str,
+        principal_ids: set[str],
+        knowledge_base_id: str | None,
+        top_k: int,
+        rrf_k: int,
+    ) -> list[KnowledgeMatch]:
+        raise KnowledgeBackendError("Hybrid search is not supported by this backend")
+
     async def aclose(self) -> None:
         return None
 
 
 class InMemoryKnowledgeBackend(KnowledgeBackend):
+    _token_pattern = DeterministicEmbedder._token_pattern
+
     def __init__(self) -> None:
         self._chunks: dict[str, KnowledgeChunk] = {}
+
+    @property
+    def supports_hybrid_search(self) -> bool:
+        return True
 
     async def upsert(self, chunks: list[KnowledgeChunk]) -> None:
         for chunk in chunks:
@@ -139,6 +162,61 @@ class InMemoryKnowledgeBackend(KnowledgeBackend):
         principal_ids: set[str],
         knowledge_base_id: str | None,
         top_k: int,
+    ) -> list[KnowledgeMatch]:
+        candidates = self._authorized_matches(
+            vector=vector,
+            tenant_id=tenant_id,
+            principal_ids=principal_ids,
+            knowledge_base_id=knowledge_base_id,
+        )
+        candidates.sort(key=lambda match: (-match.score, match.document_id, match.chunk_id))
+        return candidates[:top_k]
+
+    async def search_hybrid(
+        self,
+        *,
+        query: str,
+        vector: list[float],
+        tenant_id: str,
+        principal_ids: set[str],
+        knowledge_base_id: str | None,
+        top_k: int,
+        rrf_k: int,
+    ) -> list[KnowledgeMatch]:
+        semantic = self._authorized_matches(
+            vector=vector,
+            tenant_id=tenant_id,
+            principal_ids=principal_ids,
+            knowledge_base_id=knowledge_base_id,
+        )
+        semantic.sort(key=lambda match: (-match.score, match.document_id, match.chunk_id))
+        lexical = [(self._lexical_score(query, match), match) for match in semantic]
+        lexical = [item for item in lexical if item[0] > 0]
+        lexical.sort(key=lambda item: (-item[0], item[1].document_id, item[1].chunk_id))
+        semantic_ranks = {match.chunk_id: index for index, match in enumerate(semantic, start=1)}
+        lexical_ranks = {match.chunk_id: index for index, (_, match) in enumerate(lexical, start=1)}
+        fused = [
+            replace(
+                match,
+                score=(1 / (rrf_k + semantic_ranks[match.chunk_id]))
+                + (
+                    1 / (rrf_k + lexical_ranks[match.chunk_id])
+                    if match.chunk_id in lexical_ranks
+                    else 0
+                ),
+            )
+            for match in semantic
+        ]
+        fused.sort(key=lambda match: (-match.score, match.document_id, match.chunk_id))
+        return fused[:top_k]
+
+    def _authorized_matches(
+        self,
+        *,
+        vector: list[float],
+        tenant_id: str,
+        principal_ids: set[str],
+        knowledge_base_id: str | None,
     ) -> list[KnowledgeMatch]:
         candidates: list[KnowledgeMatch] = []
         for chunk in self._chunks.values():
@@ -162,8 +240,17 @@ class InMemoryKnowledgeBackend(KnowledgeBackend):
                     source_url=chunk.source_url,
                 )
             )
-        candidates.sort(key=lambda match: (-match.score, match.document_id, match.chunk_id))
-        return candidates[:top_k]
+        return candidates
+
+    def _lexical_score(self, query: str, match: KnowledgeMatch) -> int:
+        query_tokens = set(self._token_pattern.findall(query.lower()))
+        if not query_tokens:
+            return 0
+        title_tokens = self._token_pattern.findall(match.title.lower())
+        content_tokens = self._token_pattern.findall(match.content.lower())
+        return sum(
+            (2 * title_tokens.count(token)) + content_tokens.count(token) for token in query_tokens
+        )
 
 
 class QdrantKnowledgeBackend(KnowledgeBackend):
@@ -308,15 +395,21 @@ class KnowledgeService:
         embedder: DeterministicEmbedder,
         chunk_size: int = 800,
         chunk_overlap: int = 120,
+        ranking: Literal["semantic", "hybrid"] = "semantic",
+        hybrid_rrf_k: int = 60,
     ) -> None:
         if chunk_size < 32:
             raise ValueError("Chunk size must be at least 32 characters")
         if chunk_overlap < 0 or chunk_overlap >= chunk_size:
             raise ValueError("Chunk overlap must be non-negative and smaller than chunk size")
+        if hybrid_rrf_k < 1:
+            raise ValueError("Hybrid RRF k must be at least 1")
         self.backend = backend
         self.embedder = embedder
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.ranking = ranking
+        self.hybrid_rrf_k = hybrid_rrf_k
 
     async def index_document(
         self, *, tenant_id: str, document: KnowledgeDocumentInput
@@ -358,12 +451,28 @@ class KnowledgeService:
         knowledge_base_id: str | None,
         top_k: int,
     ) -> list[KnowledgeMatch]:
+        vector = self.embedder.embed(query)
+        bounded_top_k = max(1, min(top_k, 10))
+        if self.ranking == "hybrid":
+            if not self.backend.supports_hybrid_search:
+                raise KnowledgeBackendError(
+                    "Hybrid ranking is currently supported only by the in-memory backend"
+                )
+            return await self.backend.search_hybrid(
+                query=query,
+                vector=vector,
+                tenant_id=tenant_id,
+                principal_ids=principal_ids,
+                knowledge_base_id=knowledge_base_id,
+                top_k=bounded_top_k,
+                rrf_k=self.hybrid_rrf_k,
+            )
         return await self.backend.search(
-            vector=self.embedder.embed(query),
+            vector=vector,
             tenant_id=tenant_id,
             principal_ids=principal_ids,
             knowledge_base_id=knowledge_base_id,
-            top_k=max(1, min(top_k, 10)),
+            top_k=bounded_top_k,
         )
 
     async def aclose(self) -> None:

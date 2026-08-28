@@ -131,3 +131,69 @@ async def test_qdrant_query_always_contains_server_side_access_filter() -> None:
         "public",
         "allowed_principal_ids",
     }
+
+
+@pytest.mark.asyncio
+async def test_hybrid_ranking_boosts_title_keyword_matches() -> None:
+    service = KnowledgeService(
+        backend=InMemoryKnowledgeBackend(),
+        embedder=DeterministicEmbedder(dimensions=64),
+        chunk_size=80,
+        chunk_overlap=10,
+        ranking="hybrid",
+    )
+    await service.index_document(
+        tenant_id="tenant-a",
+        document=KnowledgeDocumentInput(
+            title="Quarterly compliance schedule",
+            content="This notice contains the current internal timetable.",
+            public=True,
+        ),
+    )
+    await service.index_document(
+        tenant_id="tenant-a",
+        document=KnowledgeDocumentInput(
+            title="General operational note",
+            content="This notice contains the current internal timetable.",
+            public=True,
+        ),
+    )
+
+    matches = await service.search(
+        query="compliance",
+        tenant_id="tenant-a",
+        principal_ids=set(),
+        knowledge_base_id=None,
+        top_k=2,
+    )
+
+    assert [match.title for match in matches] == [
+        "Quarterly compliance schedule",
+        "General operational note",
+    ]
+    assert matches[0].score > matches[1].score
+
+
+@pytest.mark.asyncio
+async def test_hybrid_ranking_rejects_qdrant_until_lexical_index_is_configured() -> None:
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(500))
+    ) as client:
+        service = KnowledgeService(
+            backend=QdrantKnowledgeBackend(
+                base_url="https://qdrant.test",
+                collection="knowledge",
+                dimensions=64,
+                http_client=client,
+            ),
+            embedder=DeterministicEmbedder(dimensions=64),
+            ranking="hybrid",
+        )
+        with pytest.raises(RuntimeError, match="in-memory backend"):
+            await service.search(
+                query="compliance",
+                tenant_id="tenant-a",
+                principal_ids=set(),
+                knowledge_base_id=None,
+                top_k=1,
+            )
