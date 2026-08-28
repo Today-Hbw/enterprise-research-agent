@@ -75,6 +75,7 @@ def build_tool_registry(
     http_fetch_tool: BaseTool | None = None,
     schema_search_tool: BaseTool | None = None,
     execute_sql_tool: BaseTool | None = None,
+    python_execute_tool: BaseTool | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     common_query_schema = {
@@ -161,7 +162,8 @@ def build_tool_registry(
             timeout_seconds=timeout_seconds,
             permission=ToolPermission.MEDIUM,
         ),
-        FixedResultTool(
+        python_execute_tool
+        or FixedResultTool(
             name="python_execute",
             description="Perform deterministic data analysis (fixed stub; no code execution).",
             input_schema={

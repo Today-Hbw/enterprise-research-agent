@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     postgres_query_timeout_ms: int = Field(default=5_000, ge=100, le=60_000)
     postgres_max_rows: int = Field(default=500, ge=1, le=10_000)
 
+    python_backend: Literal["stub", "isolated"] = "stub"
+    python_worker_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    python_worker_max_output_bytes: int = Field(default=65_536, ge=256, le=1_000_000)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -126,6 +126,17 @@ docker compose up --build
 | `GET` | `/api/runs/{id}` | Read a traceable run |
 
 Example:
+### Isolated Python calculation
+
+`PYTHON_BACKEND=stub` remains the default. To enable deterministic calculations, set:
+
+```bash
+PYTHON_BACKEND=isolated
+PYTHON_WORKER_TIMEOUT_SECONDS=5
+PYTHON_WORKER_MAX_OUTPUT_BYTES=65536
+```
+
+The enabled tool launches a separate `python -I -S` process in a fresh temporary working directory. It accepts only a bounded arithmetic/comparison expression and explicitly supplied scalar or numeric-sequence variables; imports, attribute access, calls, assignments, files, and networking are rejected by an AST allowlist. The parent enforces input/output caps and terminates the worker at the configured timeout. The expression-only contract intentionally bounds CPU and memory work at the application layer; OS-level cgroup/Job Object resource caps are a deployment hardening follow-up.
 ### Read-only PostgreSQL schema retrieval and SQL
 
 SQL stays in `stub` mode unless configured. Enabling it replaces both `schema_search` and `execute_sql` with a PostgreSQL-backed implementation:
@@ -184,7 +195,7 @@ ruff check .
 - The deterministic local embedding supports offline tests but is not a substitute for a production embedding model.
 - Qdrant should use API-key/TLS controls and private networking outside local development.
 - SQL remains stubbed by default; the PostgreSQL backend requires explicit configuration, AST validation, a read-only transaction, timeout, schema allowlist, row cap, and non-sensitive audit metadata.
-- Python is never executed; the Python tool returns a fixed result.
+- Python is stubbed by default. The optional isolated mode supports only bounded expressions, not arbitrary Python packages or scripts; OS-level resource caps remain a deployment hardening follow-up.
 - HTTP and browser tools never make network requests.
 - High-risk browser behavior is labeled `high` permission but has no approval workflow yet.
 - The OpenAI API key is read only from configuration and is never included in API responses, traces, or logs.

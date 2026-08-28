@@ -117,9 +117,7 @@ class DeterministicProvider(LLMProvider):
                 tool_calls=[
                     ToolCall(
                         name="python_execute",
-                        arguments={
-                            "task": "Calculate quarter-over-quarter change and concentration risk"
-                        },
+                        arguments={"expression": "(1240000 - 1100000) / 1100000"},
                     )
                 ],
                 decision_summary="Structured data is available; calculate deterministic metrics.",

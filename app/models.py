@@ -38,6 +38,7 @@ class SourceType(StrEnum):
     WEB = "web"
     API = "api"
     SQL = "sql"
+    PYTHON = "python"
     BROWSER = "browser"
     MCP = "mcp"
 
