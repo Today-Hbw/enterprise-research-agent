@@ -60,6 +60,9 @@ class Settings(BaseSettings):
 
     mcp_servers_json: str = ""
 
+    state_backend: Literal["memory", "postgres"] = "memory"
+    state_postgres_dsn: SecretStr | None = None
+
 
 @lru_cache
 def get_settings() -> Settings:

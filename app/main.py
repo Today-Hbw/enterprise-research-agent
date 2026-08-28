@@ -28,7 +28,8 @@ from app.models import (
     StreamEvent,
     ToolSpec,
 )
-from app.store import store
+from app.postgres_store import PostgresStore
+from app.store import store as memory_store
 from app.tools.browser import PlaywrightBrowserTool
 from app.tools.knowledge import KnowledgeSearchTool
 from app.tools.mcp import McpInvokeTool, load_mcp_catalog
@@ -38,6 +39,12 @@ from app.tools.stubs import build_tool_registry
 from app.tools.web import BraveSearchBackend, HttpFetchTool, SafeHttpFetcher, WebSearchTool
 
 settings = get_settings()
+if settings.state_backend == "postgres":
+    if settings.state_postgres_dsn is None:
+        raise RuntimeError("STATE_POSTGRES_DSN is required when STATE_BACKEND=postgres")
+    store = PostgresStore(settings.state_postgres_dsn.get_secret_value())
+else:
+    store = memory_store
 embedder = DeterministicEmbedder(settings.knowledge_embedding_dimensions)
 if settings.knowledge_backend == "qdrant":
     knowledge_backend = QdrantKnowledgeBackend(
@@ -136,6 +143,8 @@ runtime = AgentRuntime(
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
+        if isinstance(store, PostgresStore):
+            await store.initialize()
         yield
     finally:
         await runtime.provider.aclose()
@@ -176,6 +185,7 @@ async def health() -> dict[str, object]:
         "sql_backend": settings.sql_backend,
         "python_backend": settings.python_backend,
         "browser_backend": settings.browser_backend,
+        "state_backend": settings.state_backend,
     }
 
 
