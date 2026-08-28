@@ -62,6 +62,8 @@ class Settings(BaseSettings):
 
     state_backend: Literal["memory", "postgres"] = "memory"
     state_postgres_dsn: SecretStr | None = None
+    redis_url: SecretStr | None = None
+    redis_event_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
 
 
 @lru_cache

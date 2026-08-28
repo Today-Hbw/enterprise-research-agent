@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from app.agent.provider import build_provider
 from app.agent.runtime import AgentRuntime
 from app.config import get_settings
+from app.events import RedisEventBuffer
 from app.knowledge import (
     DeterministicEmbedder,
     IndexedKnowledgeDocument,
@@ -45,6 +46,11 @@ if settings.state_backend == "postgres":
     store = PostgresStore(settings.state_postgres_dsn.get_secret_value())
 else:
     store = memory_store
+event_buffer = (
+    RedisEventBuffer(settings.redis_url.get_secret_value(), settings.redis_event_ttl_seconds)
+    if settings.redis_url
+    else None
+)
 embedder = DeterministicEmbedder(settings.knowledge_embedding_dimensions)
 if settings.knowledge_backend == "qdrant":
     knowledge_backend = QdrantKnowledgeBackend(
@@ -149,6 +155,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     finally:
         await runtime.provider.aclose()
         await knowledge_service.aclose()
+        if event_buffer:
+            await event_buffer.aclose()
 
         for resource in web_resources:
             await resource.aclose()
@@ -303,6 +311,9 @@ async def replay_run_events(
     run = await store.get_run(run_id, access_context.tenant_id, access_context.principal_ids)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    events = await event_buffer.after(run_id, after_sequence) if event_buffer else []
+    if events:
+        return events
     events = [
         StreamEvent(event="run_started", sequence=1, run_id=run.run_id, data={"model": run.model})
     ]
@@ -384,6 +395,8 @@ async def chat_stream(
             conversation_id=request.conversation_id,
             access_context=access_context,
         ):
+            if event_buffer:
+                await event_buffer.append(item)
             payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
             yield f"event: {item.event}\ndata: {payload}\n\n"
 
