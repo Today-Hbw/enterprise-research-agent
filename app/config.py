@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     browser_timeout_seconds: float = Field(default=15, gt=0, le=60)
 
     mcp_servers_json: str = ""
+    mcp_allowed_hosts: str = ""
 
     state_backend: Literal["memory", "postgres"] = "memory"
     state_postgres_dsn: SecretStr | None = None

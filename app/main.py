@@ -76,7 +76,9 @@ execute_sql_tool: ExecuteSqlTool | None = None
 python_execute_tool: IsolatedPythonTool | None = None
 browser_tool: PlaywrightBrowserTool | None = None
 mcp_invoke_tool = McpInvokeTool(
-    load_mcp_catalog(settings.mcp_servers_json), settings.tool_timeout_seconds
+    load_mcp_catalog(settings.mcp_servers_json),
+    settings.tool_timeout_seconds,
+    set(settings.mcp_allowed_hosts.split(",")),
 )
 if settings.browser_backend == "playwright":
     browser_tool = PlaywrightBrowserTool(
