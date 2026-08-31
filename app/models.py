@@ -135,6 +135,37 @@ class RunMetrics(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     estimated_cost: float | None = None
+    budget_exhausted: bool = False
+    budget_reason: str | None = None
+
+
+class RunBudget(BaseModel):
+    token_limit: int | None = None
+    cost_limit: float | None = None
+
+
+class RunSummary(BaseModel):
+    run_id: str
+    conversation_id: str
+    user_query: str
+    model: str
+    status: RunStatus
+    created_at: datetime
+    completed_at: datetime | None = None
+    metrics: RunMetrics
+    budget: RunBudget
+    error: str | None = None
+
+
+class RunDashboard(BaseModel):
+    total_runs: int = 0
+    status_counts: dict[str, int] = Field(default_factory=dict)
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_tokens: int = 0
+    total_estimated_cost: float | None = None
+    average_duration_ms: int = 0
+    recent_runs: list[RunSummary] = Field(default_factory=list)
 
 
 class RunRecord(BaseModel):
@@ -151,6 +182,7 @@ class RunRecord(BaseModel):
     sources: list[Source] = Field(default_factory=list)
     trace: list[TraceStep] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)
+    budget: RunBudget = Field(default_factory=RunBudget)
     error: str | None = None
 
 

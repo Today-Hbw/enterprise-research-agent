@@ -122,6 +122,29 @@ class PostgresStore:
             )
         ]
 
+    async def list_runs(
+        self,
+        tenant_id: str | None = None,
+        principal_ids: set[str] | None = None,
+        limit: int = 50,
+    ) -> list[RunRecord]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if tenant_id is not None:
+            clauses.append("tenant_id=%s")
+            params.append(tenant_id)
+        if principal_ids is not None:
+            clauses.append("principals && %s::text[]")
+            params.append(list(principal_ids))
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = await self._fetch(
+            "SELECT payload FROM agent_runs"
+            f"{where} ORDER BY (payload->>'created_at')::timestamptz DESC LIMIT %s",
+            tuple(params),
+        )
+        return [RunRecord.model_validate(payload) for (payload,) in rows]
+
     async def fail_running_run(self, run_id: str, error: str) -> RunRecord | None:
         item = await self.get_run(run_id)
         if item and item.status == RunStatus.RUNNING:

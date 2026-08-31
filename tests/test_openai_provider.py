@@ -196,7 +196,12 @@ async def test_runtime_records_openai_token_metrics() -> None:
         )
         store = InMemoryStore()
         runtime = AgentRuntime(
-            settings=Settings(run_timeout_seconds=5, tool_timeout_seconds=1),
+            settings=Settings(
+                run_timeout_seconds=5,
+                tool_timeout_seconds=1,
+                llm_input_cost_per_million_tokens=1,
+                llm_output_cost_per_million_tokens=2,
+            ),
             provider=provider,
             registry=build_stub_registry(1),
             store=store,
@@ -210,3 +215,4 @@ async def test_runtime_records_openai_token_metrics() -> None:
     assert run.final_answer == "The stub source supports the demo recommendation."
     assert (run.metrics.input_tokens, run.metrics.output_tokens) == (18, 7)
     assert run.metrics.token_usage == 25
+    assert run.metrics.estimated_cost == 0.000032

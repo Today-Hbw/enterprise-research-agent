@@ -14,8 +14,8 @@ A lightweight, traceable research agent based on the [PRD](https://app.notion.co
 - Real text ingestion, deterministic chunking, authorization filtering, and anchored citations
 - Optional Qdrant vector storage; SQL is available as an explicitly configured read-only PostgreSQL tool, while three execution tools remain placeholders
 - In-memory conversations and run records
-- Source citations, explainable execution trace, run latency, decision count, and tool-call count
-- Responsive three-panel interface for conversations, chat, sources, and trace
+- Source citations, explainable execution trace, token/cost metrics, configurable run budgets, and latency/call counts
+- Tenant/principal-scoped Run Dashboard API and responsive three-panel UI for conversations, chat, sources, trace, and run metrics
 - Docker Compose and automated runtime/API/contract tests
 
 ## Architecture
@@ -58,6 +58,25 @@ and records input/output token totals in each run. This follows OpenAI's
 
 The application fails fast if `LLM_PROVIDER=openai` is selected without `OPENAI_API_KEY`; it does not
 silently fall back to deterministic answers.
+
+### Run budgets and cost estimates
+
+Token and cost controls are server-owned and optional:
+
+```bash
+RUN_TOKEN_BUDGET=50000
+RUN_COST_BUDGET_USD=1.00
+LLM_INPUT_COST_PER_MILLION_TOKENS=0.25
+LLM_OUTPUT_COST_PER_MILLION_TOKENS=2.00
+```
+
+Pricing is intentionally operator-supplied because it varies by provider, model, contract, and time.
+The input/output rates must be configured together; every Run then records an estimated USD cost from
+reported input/output usage. The runtime checks configured ceilings before tool execution and before
+each subsequent model
+call, marks the persisted Run as budget-exhausted, and stops further work. A provider response can
+cross the remaining ceiling because the exact input usage is only known after that response returns;
+if it already contains the final answer, the answer is retained and the over-budget state is visible.
 
 ## Run locally
 
@@ -125,6 +144,7 @@ docker compose up --build
 | `POST` | `/api/chat/stream` | Stream ordered SSE events |
 | `GET` | `/api/conversations` | List in-memory conversations |
 | `GET` | `/api/conversations/{id}` | Read one conversation |
+| `GET` | `/api/runs?limit=20` | Aggregate scoped run/token/cost metrics and recent Run summaries |
 | `GET` | `/api/runs/{id}` | Read a traceable run |
 
 Example:
@@ -200,6 +220,7 @@ ruff check .
 - Python is stubbed by default. The optional isolated mode supports only bounded expressions, not arbitrary Python packages or scripts; OS-level resource caps remain a deployment hardening follow-up.
 - HTTP and browser tools never make network requests.
 - Tool execution has a server-side `TOOL_MAX_PERMISSION` ceiling (`high` by default); calls above it are rejected and retained in the run trace. High-risk browser behavior still has no approval workflow.
+- Run token/cost budgets are enforced between provider responses; they are not billing guarantees, and configured cost rates must be kept current by the operator.
 - The OpenAI API key is read only from configuration and is never included in API responses, traces, or logs.
 - State is process-local and disappears on restart.
 - Authentication, tenant provisioning, durable audit logs, and production rate limiting are not implemented.

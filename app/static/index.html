@@ -61,6 +61,7 @@
         <div class="inspector-tabs" role="tablist">
           <button class="tab active" data-tab="trace">Trace</button>
           <button class="tab" data-tab="sources">Sources <span id="source-count">0</span></button>
+          <button class="tab" data-tab="dashboard">Runs</button>
         </div>
         <div id="trace-pane" class="inspector-pane active">
           <div id="run-summary" class="run-summary muted">No active run</div>
@@ -68,6 +69,9 @@
         </div>
         <div id="sources-pane" class="inspector-pane">
           <div id="source-list" class="source-list"></div>
+        </div>
+        <div id="dashboard-pane" class="inspector-pane">
+          <div id="dashboard-content" class="dashboard-content muted">Loading run metrics…</div>
         </div>
       </aside>
     </main>

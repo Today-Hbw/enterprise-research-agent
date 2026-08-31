@@ -1,7 +1,7 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Literal, Self
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.models import ToolPermission
@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     app_env: str = "development"
     max_steps: int = Field(default=8, ge=1, le=32)
     run_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    run_token_budget: int | None = Field(default=None, ge=1)
+    run_cost_budget_usd: float | None = Field(default=None, gt=0)
     tool_timeout_seconds: float = Field(default=5, gt=0, le=60)
     tool_max_permission: ToolPermission = ToolPermission.HIGH
     max_parallel_tools: int = Field(default=4, ge=1, le=16)
@@ -22,6 +24,8 @@ class Settings(BaseSettings):
     openai_model: str = Field(default="gpt-5-mini", min_length=1)
     openai_base_url: str = Field(default="https://api.openai.com/v1", min_length=1)
     openai_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    llm_input_cost_per_million_tokens: float | None = Field(default=None, ge=0)
+    llm_output_cost_per_million_tokens: float | None = Field(default=None, ge=0)
     knowledge_backend: Literal["memory", "qdrant"] = "memory"
     knowledge_default_tenant: str = Field(default="demo", min_length=1, max_length=128)
     knowledge_default_principal: str = Field(default="demo-user", min_length=1, max_length=128)
@@ -73,6 +77,16 @@ class Settings(BaseSettings):
     state_postgres_dsn: SecretStr | None = None
     redis_url: SecretStr | None = None
     redis_event_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
+
+    @model_validator(mode="after")
+    def require_rates_for_cost_budget(self) -> Self:
+        has_input_rate = self.llm_input_cost_per_million_tokens is not None
+        has_output_rate = self.llm_output_cost_per_million_tokens is not None
+        if has_input_rate != has_output_rate:
+            raise ValueError("LLM input and output token cost rates must be configured together")
+        if self.run_cost_budget_usd is not None and not has_input_rate and not has_output_rate:
+            raise ValueError("RUN_COST_BUDGET_USD requires configured LLM token cost rates")
+        return self
 
 
 @lru_cache

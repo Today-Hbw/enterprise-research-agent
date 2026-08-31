@@ -10,6 +10,7 @@ from app.models import (
     AccessContext,
     Message,
     MessageRole,
+    RunBudget,
     RunRecord,
     RunStatus,
     StreamEvent,
@@ -62,6 +63,10 @@ class AgentRuntime:
             principal_ids=access_context.principal_ids,
             user_query=query,
             model=self.provider.name,
+            budget=RunBudget(
+                token_limit=self.settings.run_token_budget,
+                cost_limit=self.settings.run_cost_budget_usd,
+            ),
         )
         await self.store.save_run(run)
         sequence = 0
@@ -110,7 +115,11 @@ class AgentRuntime:
             )
             yield event("run_completed", run=run.model_dump(mode="json"))
         else:
-            yield event("run_failed", error=run.error or "Agent run failed")
+            yield event(
+                "run_failed",
+                error=run.error or "Agent run failed",
+                run=run.model_dump(mode="json"),
+            )
 
     async def _execute(
         self,
@@ -123,6 +132,7 @@ class AgentRuntime:
         call_signatures: set[str] = set()
 
         for step_index in range(self.settings.max_steps):
+            self._enforce_budget(run)
             decision_started = perf_counter()
             decision = await self.provider.decide(
                 query=run.user_query,
@@ -136,6 +146,7 @@ class AgentRuntime:
             run.metrics.input_tokens += decision.input_tokens
             run.metrics.output_tokens += decision.output_tokens
             run.metrics.token_usage += decision.input_tokens + decision.output_tokens
+            self._update_estimated_cost(run)
             run.trace.append(
                 TraceStep(
                     index=len(run.trace),
@@ -149,12 +160,14 @@ class AgentRuntime:
             )
 
             if decision.final_answer is not None:
+                self._mark_exhausted_budget(run)
                 run.final_answer = decision.final_answer
                 run.status = RunStatus.COMPLETED
                 run.sources = self._deduplicate_sources(prior_results)
                 yield event_factory("assistant_delta", content=decision.final_answer)
                 return
 
+            self._enforce_budget(run)
             fresh_calls = [
                 call for call in decision.tool_calls if call.signature not in call_signatures
             ]
@@ -204,6 +217,47 @@ class AgentRuntime:
                 )
 
         raise RuntimeError(f"Agent reached max_steps={self.settings.max_steps}")
+
+    def _update_estimated_cost(self, run: RunRecord) -> None:
+        input_rate = self.settings.llm_input_cost_per_million_tokens
+        output_rate = self.settings.llm_output_cost_per_million_tokens
+        if input_rate is None and output_rate is None:
+            run.metrics.estimated_cost = None
+            return
+        cost = (
+            run.metrics.input_tokens * (input_rate or 0)
+            + run.metrics.output_tokens * (output_rate or 0)
+        ) / 1_000_000
+        run.metrics.estimated_cost = round(cost, 8)
+
+    @staticmethod
+    def _budget_reason(run: RunRecord) -> str | None:
+        if run.budget.token_limit is not None and run.metrics.token_usage >= run.budget.token_limit:
+            return (
+                f"Run token budget exhausted: {run.metrics.token_usage}/"
+                f"{run.budget.token_limit} tokens"
+            )
+        if (
+            run.budget.cost_limit is not None
+            and run.metrics.estimated_cost is not None
+            and run.metrics.estimated_cost >= run.budget.cost_limit
+        ):
+            return (
+                f"Run cost budget exhausted: ${run.metrics.estimated_cost:.8f}/"
+                f"${run.budget.cost_limit:.8f}"
+            )
+        return None
+
+    def _mark_exhausted_budget(self, run: RunRecord) -> None:
+        reason = self._budget_reason(run)
+        if reason:
+            run.metrics.budget_exhausted = True
+            run.metrics.budget_reason = reason
+
+    def _enforce_budget(self, run: RunRecord) -> None:
+        self._mark_exhausted_budget(run)
+        if run.metrics.budget_reason:
+            raise RuntimeError(run.metrics.budget_reason)
 
     async def _execute_tool(
         self,

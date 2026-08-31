@@ -25,7 +25,9 @@ from app.models import (
     ChatRequest,
     ChatResponse,
     Conversation,
+    RunDashboard,
     RunRecord,
+    RunSummary,
     StreamEvent,
     ToolSpec,
 )
@@ -203,6 +205,12 @@ async def health() -> dict[str, object]:
         "python_backend": settings.python_backend,
         "browser_backend": settings.browser_backend,
         "tool_max_permission": settings.tool_max_permission,
+        "run_token_budget": settings.run_token_budget,
+        "run_cost_budget_usd": settings.run_cost_budget_usd,
+        "cost_estimation_enabled": (
+            settings.llm_input_cost_per_million_tokens is not None
+            and settings.llm_output_cost_per_million_tokens is not None
+        ),
         "state_backend": settings.state_backend,
     }
 
@@ -308,6 +316,40 @@ async def get_run(
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     return run
+
+
+@app.get("/api/runs", response_model=RunDashboard)
+async def get_run_dashboard(
+    limit: int = 20,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_principal_ids: str | None = Header(default=None, alias="X-Principal-Ids"),
+) -> RunDashboard:
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="limit must be between 1 and 100")
+    access_context = access_context_from_headers(x_tenant_id, x_principal_ids)
+    runs = await store.list_runs(
+        tenant_id=access_context.tenant_id,
+        principal_ids=access_context.principal_ids,
+        limit=limit,
+    )
+    estimated_costs = [
+        run.metrics.estimated_cost for run in runs if run.metrics.estimated_cost is not None
+    ]
+    status_counts: dict[str, int] = {}
+    for run in runs:
+        status_counts[run.status.value] = status_counts.get(run.status.value, 0) + 1
+    return RunDashboard(
+        total_runs=len(runs),
+        status_counts=status_counts,
+        total_input_tokens=sum(run.metrics.input_tokens for run in runs),
+        total_output_tokens=sum(run.metrics.output_tokens for run in runs),
+        total_tokens=sum(run.metrics.token_usage for run in runs),
+        total_estimated_cost=(round(sum(estimated_costs), 8) if estimated_costs else None),
+        average_duration_ms=(
+            round(sum(run.metrics.duration_ms for run in runs) / len(runs)) if runs else 0
+        ),
+        recent_runs=[RunSummary.model_validate(run.model_dump()) for run in runs],
+    )
 
 
 @app.get("/api/runs/{run_id}/events", response_model=list[StreamEvent])

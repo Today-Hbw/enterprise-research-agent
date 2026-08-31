@@ -1,5 +1,8 @@
+import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
+from app.config import Settings
 from app.main import app
 
 client = TestClient(app)
@@ -51,3 +54,31 @@ def test_run_events_can_be_replayed_after_a_sequence() -> None:
     assert events.status_code == 200
     assert events.json()[0]["sequence"] == 2
     assert events.json()[-1]["event"] == "run_completed"
+
+
+def test_run_dashboard_aggregates_recent_scoped_runs() -> None:
+    created = client.post("/api/chat", json={"query": "dashboard metrics"}).json()["run"]
+    response = client.get("/api/runs?limit=20")
+
+    assert response.status_code == 200
+    dashboard = response.json()
+    assert dashboard["total_runs"] >= 1
+    assert dashboard["status_counts"]["completed"] >= 1
+    assert dashboard["total_tokens"] >= created["metrics"]["token_usage"]
+    assert any(run["run_id"] == created["run_id"] for run in dashboard["recent_runs"])
+    summary = next(run for run in dashboard["recent_runs"] if run["run_id"] == created["run_id"])
+    assert "trace" not in summary
+    assert summary["budget"] == {"token_limit": None, "cost_limit": None}
+
+
+def test_run_dashboard_rejects_out_of_range_limit() -> None:
+    assert client.get("/api/runs?limit=0").status_code == 400
+    assert client.get("/api/runs?limit=101").status_code == 400
+
+
+def test_cost_budget_requires_rates_and_rejects_partial_pricing() -> None:
+    with pytest.raises(ValidationError, match="requires configured"):
+        Settings(run_cost_budget_usd=1)
+
+    with pytest.raises(ValidationError, match="must be configured together"):
+        Settings(llm_input_cost_per_million_tokens=1)

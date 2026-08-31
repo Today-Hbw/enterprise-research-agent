@@ -105,6 +105,27 @@ class InMemoryStore:
                 reverse=True,
             )
 
+    async def list_runs(
+        self,
+        tenant_id: str | None = None,
+        principal_ids: set[str] | None = None,
+        limit: int = 50,
+    ) -> list[RunRecord]:
+        async with self._lock:
+            return sorted(
+                (
+                    item
+                    for item in self._runs.values()
+                    if (tenant_id is None or item.tenant_id == tenant_id)
+                    and (
+                        principal_ids is None
+                        or bool(item.principal_ids.intersection(principal_ids))
+                    )
+                ),
+                key=lambda item: item.created_at,
+                reverse=True,
+            )[:limit]
+
     async def fail_running_run(self, run_id: str, error: str) -> RunRecord | None:
         async with self._lock:
             run = self._runs.get(run_id)

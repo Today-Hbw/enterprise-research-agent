@@ -28,6 +28,8 @@ def test_conversation_and_run_history_are_tenant_scoped(monkeypatch) -> None:
             json={"query": "continue", "conversation_id": conversation_id},
         )
         tenant_b_conversations = client.get("/api/conversations", headers=headers_b)
+        tenant_a_dashboard = client.get("/api/runs", headers=headers_a)
+        tenant_b_dashboard = client.get("/api/runs", headers=headers_b)
 
     assert created.status_code == 200
     assert own_conversation.status_code == 200
@@ -38,3 +40,5 @@ def test_conversation_and_run_history_are_tenant_scoped(monkeypatch) -> None:
         conversation["conversation_id"] != conversation_id
         for conversation in tenant_b_conversations.json()
     )
+    assert any(run["run_id"] == run_id for run in tenant_a_dashboard.json()["recent_runs"])
+    assert all(run["run_id"] != run_id for run in tenant_b_dashboard.json()["recent_runs"])

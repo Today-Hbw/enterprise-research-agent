@@ -95,6 +95,78 @@ async def test_repeated_tool_call_fails_run_instead_of_looping() -> None:
     run = await memory.get_run(events[-1].run_id)
 
     assert events[-1].event == "run_failed"
+    assert events[-1].data["run"]["status"] == "failed"
     assert run is not None
     assert run.status == RunStatus.FAILED
     assert "Repeated tool call" in run.error
+
+
+class TokenHungryProvider(LLMProvider):
+    name = "token-hungry-test-provider"
+
+    async def decide(self, **_kwargs) -> AgentDecision:
+        return AgentDecision(
+            tool_calls=[ToolCall(name="web_search", arguments={"query": "budget"})],
+            decision_summary="A provider response consumed the remaining token budget.",
+            input_tokens=10,
+            output_tokens=5,
+        )
+
+
+@pytest.mark.asyncio
+async def test_token_budget_stops_run_before_tools_or_another_llm_call() -> None:
+    settings = Settings(
+        max_steps=8,
+        run_timeout_seconds=5,
+        run_token_budget=12,
+        tool_timeout_seconds=1,
+    )
+    memory = InMemoryStore()
+    runtime = AgentRuntime(
+        settings=settings,
+        provider=TokenHungryProvider(),
+        registry=build_stub_registry(1),
+        store=memory,
+    )
+
+    events = [event async for event in runtime.stream(query="budget", conversation_id=None)]
+    run = await memory.get_run(events[-1].run_id)
+
+    assert events[-1].event == "run_failed"
+    assert events[-1].data["run"]["metrics"]["budget_exhausted"] is True
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert run.metrics.token_usage == 15
+    assert run.metrics.tool_call_count == 0
+    assert run.metrics.budget_exhausted is True
+    assert run.metrics.budget_reason == "Run token budget exhausted: 15/12 tokens"
+    assert run.budget.token_limit == 12
+
+
+@pytest.mark.asyncio
+async def test_cost_budget_uses_configured_rates_and_stops_the_run() -> None:
+    settings = Settings(
+        max_steps=8,
+        run_timeout_seconds=5,
+        run_cost_budget_usd=0.000019,
+        tool_timeout_seconds=1,
+        llm_input_cost_per_million_tokens=1,
+        llm_output_cost_per_million_tokens=2,
+    )
+    memory = InMemoryStore()
+    runtime = AgentRuntime(
+        settings=settings,
+        provider=TokenHungryProvider(),
+        registry=build_stub_registry(1),
+        store=memory,
+    )
+
+    events = [event async for event in runtime.stream(query="budget", conversation_id=None)]
+    run = await memory.get_run(events[-1].run_id)
+
+    assert events[-1].event == "run_failed"
+    assert events[-1].data["run"]["metrics"]["estimated_cost"] == 0.00002
+    assert run is not None
+    assert run.metrics.estimated_cost == 0.00002
+    assert run.metrics.budget_exhausted is True
+    assert run.metrics.budget_reason == "Run cost budget exhausted: $0.00002000/$0.00001900"

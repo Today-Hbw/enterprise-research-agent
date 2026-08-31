@@ -14,6 +14,7 @@ const elements = {
   summary: document.querySelector("#run-summary"),
   sources: document.querySelector("#source-list"),
   sourceCount: document.querySelector("#source-count"),
+  dashboard: document.querySelector("#dashboard-content"),
 };
 
 function escapeHtml(value) {
@@ -69,9 +70,45 @@ function resetRun() {
   elements.summary.textContent = "Preparing research run…";
 }
 
+function formatCost(value) {
+  return value === null || value === undefined ? "Not configured" : `$${Number(value).toFixed(6)}`;
+}
+
+function budgetLabel(run) {
+  const limits = [];
+  if (run.budget.token_limit !== null) {
+    limits.push(`${run.metrics.token_usage.toLocaleString()} / ${run.budget.token_limit.toLocaleString()} tokens`);
+  }
+  if (run.budget.cost_limit !== null) {
+    limits.push(`${formatCost(run.metrics.estimated_cost)} / ${formatCost(run.budget.cost_limit)}`);
+  }
+  return limits.length ? limits.join(" · ") : "No run budget configured";
+}
+
+function renderRunSummary(run) {
+  const budgetState = run.metrics.budget_exhausted ? "Budget exhausted" : "Within budget";
+  elements.summary.innerHTML = `
+    <div class="run-summary-heading">
+      <strong>${escapeHtml(run.status.toUpperCase())}</strong>
+      <span>${escapeHtml(run.run_id)}</span>
+    </div>
+    <div class="metric-grid">
+      <div><span>Tokens</span><strong>${run.metrics.token_usage.toLocaleString()}</strong></div>
+      <div><span>Estimated cost</span><strong>${formatCost(run.metrics.estimated_cost)}</strong></div>
+      <div><span>Decisions</span><strong>${run.metrics.llm_call_count}</strong></div>
+      <div><span>Tool calls</span><strong>${run.metrics.tool_call_count}</strong></div>
+      <div><span>Input</span><strong>${run.metrics.input_tokens.toLocaleString()}</strong></div>
+      <div><span>Output</span><strong>${run.metrics.output_tokens.toLocaleString()}</strong></div>
+    </div>
+    <div class="budget-line ${run.metrics.budget_exhausted ? "exhausted" : ""}">
+      <strong>${budgetState}</strong>
+      <span>${escapeHtml(budgetLabel(run))}</span>
+    </div>`;
+}
+
 function renderStoredRun(run) {
   resetRun();
-  elements.summary.textContent = `${run.run_id}\n${run.status.toUpperCase()} · ${run.metrics.duration_ms}ms\n${run.metrics.llm_call_count} decisions · ${run.metrics.tool_call_count} tool calls`;
+  renderRunSummary(run);
   let decisionNumber = 0;
   for (const step of run.trace) {
     if (!step.tool_name) decisionNumber += 1;
@@ -140,11 +177,17 @@ function handleEvent(payload, assistantNode) {
     assistantNode.textContent = data.content;
   } else if (event === "run_completed") {
     const run = data.run;
-    elements.summary.textContent = `${run.run_id}\n${run.status.toUpperCase()} · ${run.metrics.duration_ms}ms\n${run.metrics.llm_call_count} decisions · ${run.metrics.tool_call_count} tool calls`;
+    renderRunSummary(run);
+    loadDashboard();
   } else if (event === "run_failed") {
     assistantNode.classList.remove("thinking");
     assistantNode.textContent = `Run failed: ${data.error}`;
-    elements.summary.textContent = `FAILED\n${data.error}`;
+    if (data.run) {
+      renderRunSummary(data.run);
+    } else {
+      elements.summary.textContent = `FAILED\n${data.error}`;
+    }
+    loadDashboard();
   }
 }
 
@@ -188,6 +231,35 @@ async function loadConversations() {
     </button>`).join("");
 }
 
+async function loadDashboard() {
+  const response = await fetch("/api/runs?limit=20");
+  if (!response.ok) {
+    elements.dashboard.textContent = "Run metrics unavailable";
+    return;
+  }
+  const dashboard = await response.json();
+  const completed = dashboard.status_counts.completed || 0;
+  const failed = dashboard.status_counts.failed || 0;
+  const recentRuns = dashboard.recent_runs.map((run) => `
+    <button class="dashboard-run" data-conversation-id="${escapeHtml(run.conversation_id)}">
+      <span class="dashboard-run-status ${escapeHtml(run.status)}">${escapeHtml(run.status)}</span>
+      <strong>${escapeHtml(run.user_query)}</strong>
+      <small>${run.metrics.token_usage.toLocaleString()} tokens · ${formatCost(run.metrics.estimated_cost)}</small>
+    </button>`).join("");
+  elements.dashboard.classList.remove("muted");
+  elements.dashboard.innerHTML = `
+    <div class="dashboard-grid">
+      <div><span>Recent runs</span><strong>${dashboard.total_runs}</strong></div>
+      <div><span>Completed</span><strong>${completed}</strong></div>
+      <div><span>Failed</span><strong>${failed}</strong></div>
+      <div><span>Total tokens</span><strong>${dashboard.total_tokens.toLocaleString()}</strong></div>
+      <div><span>Estimated cost</span><strong>${formatCost(dashboard.total_estimated_cost)}</strong></div>
+      <div><span>Avg duration</span><strong>${dashboard.average_duration_ms}ms</strong></div>
+    </div>
+    <h3 class="dashboard-heading">Latest activity</h3>
+    <div class="dashboard-runs">${recentRuns || '<p class="muted">No runs yet</p>'}</div>`;
+}
+
 elements.form.addEventListener("submit", (event) => {
   event.preventDefault();
   submitQuery(elements.query.value);
@@ -215,10 +287,16 @@ elements.conversations.addEventListener("click", (event) => {
   const item = event.target.closest(".conversation-item");
   if (item) openConversation(item.dataset.id);
 });
+elements.dashboard.addEventListener("click", (event) => {
+  const item = event.target.closest(".dashboard-run");
+  if (item) openConversation(item.dataset.conversationId);
+});
 document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
   document.querySelectorAll(".tab, .inspector-pane").forEach((item) => item.classList.remove("active"));
   tab.classList.add("active");
   document.querySelector(`#${tab.dataset.tab}-pane`).classList.add("active");
+  if (tab.dataset.tab === "dashboard") loadDashboard();
 }));
 
 loadConversations();
+loadDashboard();
