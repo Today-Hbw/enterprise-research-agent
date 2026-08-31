@@ -14,6 +14,7 @@ def test_health_and_tool_catalog() -> None:
 
     assert health.status_code == 200
     assert health.json()["demo_mode"] is True
+    assert health.json()["knowledge_url_import_enabled"] is False
     assert tools.status_code == 200
     assert len(tools.json()) == 8
 

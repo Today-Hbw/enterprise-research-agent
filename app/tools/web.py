@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
-import json
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
 import httpx
 
+from app.document_parser import DocumentParser, DownloadedResource
 from app.models import AccessContext, Source, SourceType, ToolCall, ToolResult
 from app.tools.base import BaseTool
 
@@ -111,42 +110,6 @@ class BraveSearchBackend:
             await self._client.aclose()
 
 
-class _EvidenceHtmlParser(HTMLParser):
-    _SKIP_TAGS = {"script", "style", "noscript", "template"}
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.title = ""
-        self._in_title = False
-        self._skip_depth = 0
-        self._parts: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        del attrs
-        normalized = tag.lower()
-        if normalized == "title":
-            self._in_title = True
-        if normalized in self._SKIP_TAGS:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        normalized = tag.lower()
-        if normalized == "title":
-            self._in_title = False
-        if normalized in self._SKIP_TAGS and self._skip_depth:
-            self._skip_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if self._in_title:
-            self.title += data
-        if not self._skip_depth:
-            self._parts.append(data)
-
-    @property
-    def text(self) -> str:
-        return " ".join(" ".join(self._parts).split())
-
-
 @dataclass(frozen=True)
 class FetchedPage:
     final_url: str
@@ -166,12 +129,7 @@ class SafeHttpFetcher:
     """Allowlisted, size-bounded HTTP(S) fetcher for public evidence only."""
 
     _REDIRECT_CODES = {301, 302, 303, 307, 308}
-    _ALLOWED_CONTENT_TYPES = {
-        "text/html",
-        "text/plain",
-        "application/json",
-        "application/ld+json",
-    }
+    _ALLOWED_CONTENT_TYPES = DocumentParser.SUPPORTED_CONTENT_TYPES
 
     def __init__(
         self,
@@ -183,6 +141,7 @@ class SafeHttpFetcher:
         timeout_seconds: float = 10,
         allow_http: bool = False,
         http_client: httpx.AsyncClient | None = None,
+        parser: DocumentParser | None = None,
     ) -> None:
         self._allowed_hosts = {host.strip().lower() for host in allowed_hosts if host.strip()}
         if not self._allowed_hosts:
@@ -193,8 +152,20 @@ class SafeHttpFetcher:
         self._allow_http = allow_http
         self._client = http_client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_client = http_client is None
+        self._parser = parser or DocumentParser()
 
     async def fetch(self, url: str) -> FetchedPage:
+        resource = await self.download(url)
+        parsed = await asyncio.to_thread(self._parser.parse, resource)
+        return FetchedPage(
+            final_url=resource.final_url,
+            status_code=resource.status_code,
+            content_type=resource.content_type,
+            title=parsed.title,
+            text=parsed.content,
+        )
+
+    async def download(self, url: str) -> DownloadedResource:
         current_url = url
         for redirect_count in range(self._max_redirects + 1):
             await self._validate_url(current_url)
@@ -203,7 +174,7 @@ class SafeHttpFetcher:
                     "GET",
                     current_url,
                     follow_redirects=False,
-                    headers={"Accept": "text/html,text/plain,application/json"},
+                    headers={"Accept": ",".join(sorted(self._ALLOWED_CONTENT_TYPES))},
                 ) as response:
                     if response.status_code in self._REDIRECT_CODES:
                         location = response.headers.get("location")
@@ -231,15 +202,12 @@ class SafeHttpFetcher:
                         body.extend(chunk)
                         if len(body) > self._max_bytes:
                             raise ValueError("HTTP fetch response body exceeds configured limit")
-                    title, text = self._parse_content(
-                        content_type, bytes(body), response.url.host or "Document"
-                    )
-                    return FetchedPage(
+                    return DownloadedResource(
                         final_url=str(response.url),
                         status_code=response.status_code,
                         content_type=content_type,
-                        title=title,
-                        text=text,
+                        body=bytes(body),
+                        content_disposition=response.headers.get("content-disposition"),
                     )
             except httpx.HTTPError as exc:
                 raise ValueError(f"HTTP fetch request failed: {exc}") from exc
@@ -281,21 +249,6 @@ class SafeHttpFetcher:
             host == allowed or (allowed.startswith(".") and host.endswith(allowed))
             for allowed in self._allowed_hosts
         )
-
-    @staticmethod
-    def _parse_content(content_type: str, body: bytes, fallback_title: str) -> tuple[str, str]:
-        raw_text = body.decode("utf-8", errors="replace")
-        if content_type == "text/html":
-            parser = _EvidenceHtmlParser()
-            parser.feed(raw_text)
-            return (" ".join(parser.title.split()) or fallback_title, parser.text)
-        if content_type in {"application/json", "application/ld+json"}:
-            try:
-                parsed = json.loads(raw_text)
-            except json.JSONDecodeError:
-                return fallback_title, raw_text
-            return fallback_title, json.dumps(parsed, ensure_ascii=False, sort_keys=True)
-        return fallback_title, raw_text
 
     async def aclose(self) -> None:
         if self._owns_client:

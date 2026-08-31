@@ -457,9 +457,13 @@ class KnowledgeService:
         self._token_overlap_reranker = TokenOverlapReranker()
 
     async def index_document(
-        self, *, tenant_id: str, document: KnowledgeDocumentInput
+        self,
+        *,
+        tenant_id: str,
+        document: KnowledgeDocumentInput,
+        document_id: str | None = None,
     ) -> IndexedKnowledgeDocument:
-        document_id = f"doc_{uuid4().hex}"
+        document_id = document_id or f"doc_{uuid4().hex}"
         spans = self._chunk_spans(document.content)
         chunks = [
             KnowledgeChunk(

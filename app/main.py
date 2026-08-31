@@ -11,6 +11,12 @@ from fastapi.staticfiles import StaticFiles
 from app.agent.provider import build_provider
 from app.agent.runtime import AgentRuntime
 from app.config import get_settings
+from app.document_import import (
+    ImportedKnowledgeDocument,
+    KnowledgeImportService,
+    KnowledgeUrlImportRequest,
+)
+from app.document_parser import DocumentParser
 from app.events import RedisEventBuffer
 from app.knowledge import (
     DeterministicEmbedder,
@@ -73,9 +79,11 @@ knowledge_service = KnowledgeService(
     reranker=settings.knowledge_reranker,
     rerank_candidate_k=settings.knowledge_rerank_candidate_k,
 )
+document_parser = DocumentParser(max_pdf_pages=settings.knowledge_import_max_pdf_pages)
 web_resources: list[BraveSearchBackend | SafeHttpFetcher] = []
 web_search_tool: WebSearchTool | None = None
 http_fetch_tool: HttpFetchTool | None = None
+safe_fetcher: SafeHttpFetcher | None = None
 sql_backend: PostgresBackend | None = None
 schema_search_tool: SchemaSearchTool | None = None
 execute_sql_tool: ExecuteSqlTool | None = None
@@ -128,6 +136,7 @@ if settings.http_fetch_backend == "safe":
         max_redirects=settings.http_fetch_max_redirects,
         timeout_seconds=settings.http_fetch_timeout_seconds,
         allow_http=settings.http_fetch_allow_http,
+        parser=document_parser,
     )
     web_resources.append(safe_fetcher)
     http_fetch_tool = HttpFetchTool(
@@ -201,6 +210,11 @@ async def health() -> dict[str, object]:
         "knowledge_backend": settings.knowledge_backend,
         "web_search_backend": settings.web_search_backend,
         "http_fetch_backend": settings.http_fetch_backend,
+        "knowledge_url_import_enabled": (
+            safe_fetcher is not None
+            and settings.knowledge_admin_token is not None
+            and bool(settings.knowledge_admin_token.get_secret_value())
+        ),
         "sql_backend": settings.sql_backend,
         "python_backend": settings.python_backend,
         "browser_backend": settings.browser_backend,
@@ -270,6 +284,36 @@ async def create_knowledge_document(
     return await knowledge_service.index_document(
         tenant_id=access_context.tenant_id, document=document
     )
+
+
+@app.post(
+    "/api/knowledge/import-url",
+    response_model=ImportedKnowledgeDocument,
+    status_code=201,
+)
+async def import_knowledge_url(
+    request: KnowledgeUrlImportRequest,
+    x_tenant_id: str | None = Header(default=None, alias="X-Tenant-Id"),
+    x_principal_ids: str | None = Header(default=None, alias="X-Principal-Ids"),
+    x_knowledge_admin_token: str | None = Header(default=None, alias="X-Knowledge-Admin-Token"),
+) -> ImportedKnowledgeDocument:
+    require_knowledge_admin(x_knowledge_admin_token)
+    if safe_fetcher is None:
+        raise HTTPException(status_code=503, detail="Safe HTTP import is disabled")
+    access_context = access_context_from_headers(x_tenant_id, x_principal_ids)
+    if not request.public and not request.allowed_principal_ids:
+        request = request.model_copy(
+            update={"allowed_principal_ids": sorted(access_context.principal_ids)}
+        )
+    service = KnowledgeImportService(
+        fetcher=safe_fetcher,
+        parser=document_parser,
+        knowledge_service=knowledge_service,
+    )
+    try:
+        return await service.import_url(tenant_id=access_context.tenant_id, request=request)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/conversations", response_model=list[Conversation])

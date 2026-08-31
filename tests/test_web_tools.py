@@ -91,6 +91,40 @@ async def test_safe_fetch_parses_html_and_produces_anchored_source() -> None:
 
 
 @pytest.mark.asyncio
+async def test_safe_fetch_download_accepts_supported_file_content_types() -> None:
+    async def resolver(host: str, port: int) -> set[str]:
+        assert (host, port) == ("public.example", 443)
+        return {"93.184.216.34"}
+
+    body = b"supplier,amount\nA,42\n"
+    client = _mock_client(
+        httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                headers={
+                    "content-type": "text/csv; charset=utf-8",
+                    "content-disposition": 'attachment; filename="purchases.csv"',
+                },
+                content=body,
+            )
+        )
+    )
+    fetcher = SafeHttpFetcher(
+        allowed_hosts={"public.example"}, resolver=resolver, http_client=client
+    )
+
+    resource = await fetcher.download("https://public.example/purchases.csv")
+    page = await fetcher.fetch("https://public.example/purchases.csv")
+
+    assert resource.body == body
+    assert resource.content_type == "text/csv"
+    assert resource.content_disposition == 'attachment; filename="purchases.csv"'
+    assert page.title == "purchases.csv"
+    assert page.text == "supplier\tamount\nA\t42"
+    await fetcher.aclose()
+
+
+@pytest.mark.asyncio
 async def test_safe_fetch_rejects_private_and_redirected_targets_before_request() -> None:
     calls = 0
 

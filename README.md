@@ -139,6 +139,32 @@ curl -X POST http://localhost:8000/api/knowledge/documents \
 
 Knowledge citations include `document_id`, `chunk_id`, `knowledge_base_id`, `char_start`, `char_end`, score, and the exact snippet. Character spans index the original submitted text.
 
+### URL download, parse, and RAG import
+
+URL import is available only when both controlled knowledge ingestion and the safe HTTP backend are
+enabled. It reuses the HTTP host allowlist, public-IP DNS validation, redirect checks, response-size
+limit, and HTTPS-only default before parsing and indexing the document:
+
+```bash
+curl -X POST http://localhost:8000/api/knowledge/import-url \
+  -H "Content-Type: application/json" \
+  -H "X-Knowledge-Admin-Token: $KNOWLEDGE_ADMIN_TOKEN" \
+  -H "X-Tenant-Id: demo" \
+  -H "X-Principal-Ids: demo-user" \
+  -d '{"url":"https://docs.example.com/policy.pdf","knowledge_base_id":"policy"}'
+```
+
+Supported response types are UTF-8 plain text and Markdown, HTML, CSV, JSON/JSON-LD, and PDF.
+`HTTP_FETCH_MAX_BYTES` bounds the downloaded body and `KNOWLEDGE_IMPORT_MAX_PDF_PAGES` bounds PDF
+work. Parsed text is also capped at the knowledge document limit. Encrypted PDFs, image-only/scanned
+PDFs without extractable text, ambiguous content types, and non-UTF-8 text are rejected; OCR and
+office document formats are future extensions.
+
+The import response includes the final redirected URL, detected content type, sanitized filename,
+content SHA-256, document ID, and chunk count. The document ID is derived from tenant, source,
+content, metadata, and access settings, so repeating an identical import safely upserts the same
+document/chunk IDs. Changed content or permissions produce a different document ID.
+
 Set `KNOWLEDGE_RANKING=hybrid` with the in-memory backend to fuse semantic and title/content keyword rankings using Reciprocal Rank Fusion. `KNOWLEDGE_HYBRID_RRF_K` tunes the fusion constant (default `60`). Set `KNOWLEDGE_RERANKER=token_overlap` to re-rank the configured candidate pool deterministically by query overlap in title and content; it is disabled by default. Metadata can be attached at ingestion and filtered only through server-configured KNOWLEDGE_METADATA_FILTER_KEYS; empty configuration disables metadata filters. Qdrant remains explicitly semantic-only until its sparse-vector/text-index path is configured.
 
 To start the local stack with development defaults:
@@ -154,6 +180,7 @@ docker compose up --build
 | `GET` | `/api/health` | Health and demo-mode status |
 | `GET` | `/api/tools` | Tool catalog and JSON schemas |
 | `POST` | `/api/knowledge/documents` | Admin-token protected text ingestion |
+| `POST` | `/api/knowledge/import-url` | Admin-token protected safe URL download, parse, and RAG ingestion |
 | `POST` | `/api/chat` | Run synchronously and return a complete run |
 | `POST` | `/api/chat/stream` | Stream ordered SSE events |
 | `GET` | `/api/conversations` | List in-memory conversations |
@@ -264,7 +291,8 @@ python -m app.evaluation --dataset evals/demo.json
 - Qdrant should use API-key/TLS controls and private networking outside local development.
 - SQL remains stubbed by default; the PostgreSQL backend requires explicit configuration, AST validation, a read-only transaction, timeout, schema allowlist, row cap, and non-sensitive audit metadata.
 - Python is stubbed by default. The optional isolated mode supports only bounded expressions, not arbitrary Python packages or scripts; OS-level resource caps remain a deployment hardening follow-up.
-- HTTP and browser tools never make network requests.
+- HTTP and browser tools are stubbed by default. The opt-in safe HTTP backend makes only allowlisted,
+  public-address, size-bounded requests; browser automation remains a stub.
 - Tool execution has a server-side `TOOL_MAX_PERMISSION` ceiling (`high` by default); calls above it are rejected and retained in the run trace. High-risk browser behavior still has no approval workflow.
 - Run token/cost budgets are enforced between provider responses; they are not billing guarantees, and configured cost rates must be kept current by the operator.
 - The built-in evaluation runner is an offline structural regression suite; it does not claim production retrieval quality or semantic answer correctness.
@@ -277,8 +305,8 @@ python -m app.evaluation --dataset evals/demo.json
 Each real integration should implement the existing `BaseTool` contract and be registered without changing the agent runtime or API event protocol. Recommended order:
 
 1. Real LLM provider and native tool calling.
-2. Production embedding, file parsing, payload indexes, reranking, and retrieval evaluation.
-3. Web Search and hardened HTTP fetch/parser.
+2. Production embedding, payload indexes, corpus-scale reranking, and retrieval evaluation.
+3. Extend the bounded URL importer with OCR and office document parsers.
 4. Schema retrieval, SQL AST validation, read-only PostgreSQL, timeout, and row limit.
 5. Isolated Python worker and Playwright browser worker.
 6. MCP discovery/invocation and permissions.

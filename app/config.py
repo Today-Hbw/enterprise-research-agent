@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     knowledge_reranker: Literal["none", "token_overlap"] = "none"
     knowledge_rerank_candidate_k: int = Field(default=30, ge=1, le=100)
     knowledge_metadata_filter_keys: str = ""
+    knowledge_import_max_pdf_pages: int = Field(default=100, ge=1, le=1_000)
     qdrant_url: str = Field(default="http://localhost:6333", min_length=1)
     qdrant_api_key: SecretStr | None = None
     qdrant_collection: str = Field(default="enterprise_knowledge", min_length=1)
