@@ -31,6 +31,7 @@ from app.models import (
     ChatRequest,
     ChatResponse,
     Conversation,
+    PlanStepStatus,
     RunDashboard,
     RunRecord,
     RunSummary,
@@ -413,6 +414,21 @@ async def replay_run_events(
     events = [
         StreamEvent(event="run_started", sequence=1, run_id=run.run_id, data={"model": run.model})
     ]
+    if run.plan:
+        pending_plan = [
+            step.model_copy(update={"status": PlanStepStatus.PENDING, "error": None}).model_dump(
+                mode="json"
+            )
+            for step in run.plan
+        ]
+        events.append(
+            StreamEvent(
+                event="plan_created",
+                sequence=len(events) + 1,
+                run_id=run.run_id,
+                data={"plan": pending_plan},
+            )
+        )
     for trace in run.trace:
         sequence = len(events) + 1
         event = "agent_decision" if trace.kind == "agent_decision" else "tool_completed"
@@ -426,6 +442,17 @@ async def replay_run_events(
                     "tool_name": trace.tool_name,
                     "status": trace.status,
                 },
+            )
+        )
+    for step in run.plan:
+        if step.status.value == "pending":
+            continue
+        events.append(
+            StreamEvent(
+                event="plan_step_updated",
+                sequence=len(events) + 1,
+                run_id=run.run_id,
+                data={"step": step.model_dump(mode="json")},
             )
         )
     events.append(

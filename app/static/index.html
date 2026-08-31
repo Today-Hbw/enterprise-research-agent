@@ -68,12 +68,16 @@
 
       <aside id="inspector" class="panel inspector" aria-label="Run inspector">
         <div class="inspector-tabs" role="tablist">
-          <button class="tab active" role="tab" aria-selected="true" aria-controls="trace-pane" data-tab="trace">Trace</button>
+          <button class="tab active" role="tab" aria-selected="true" aria-controls="plan-pane" data-tab="plan">Plan</button>
+          <button class="tab" role="tab" aria-selected="false" aria-controls="trace-pane" data-tab="trace">Trace</button>
           <button class="tab" role="tab" aria-selected="false" aria-controls="sources-pane" data-tab="sources">Sources <span id="source-count">0</span></button>
           <button class="tab" role="tab" aria-selected="false" aria-controls="dashboard-pane" data-tab="dashboard">Runs</button>
           <button id="inspector-close" class="inspector-close" type="button" aria-label="Close Inspector">×</button>
         </div>
-        <div id="trace-pane" class="inspector-pane active" role="tabpanel">
+        <div id="plan-pane" class="inspector-pane active" role="tabpanel">
+          <div id="plan-list" class="plan-list muted">Waiting for the first agent decision…</div>
+        </div>
+        <div id="trace-pane" class="inspector-pane" role="tabpanel">
           <div id="run-summary" class="run-summary muted">No active run</div>
           <div id="trace-list" class="trace-list"></div>
         </div>

@@ -3,7 +3,7 @@ import pytest
 from app.agent.provider import DeterministicProvider, LLMProvider
 from app.agent.runtime import AgentRuntime
 from app.config import Settings
-from app.models import AgentDecision, RunStatus, ToolCall
+from app.models import AgentDecision, PlanStepStatus, RunStatus, ToolCall
 from app.store import InMemoryStore
 from app.tools.stubs import build_stub_registry
 
@@ -38,12 +38,35 @@ async def test_complex_research_run_completes_with_trace_and_sources() -> None:
     assert events[0].event == "run_started"
     assert events[-1].event == "run_completed"
     assert [event.sequence for event in events] == list(range(1, len(events) + 1))
+    assert [event.event for event in events].count("plan_created") == 1
+    assert [event.event for event in events].count("plan_updated") == 2
+    plan_created = next(event for event in events if event.event == "plan_created")
+    assert events.index(plan_created) < next(
+        i for i, event in enumerate(events) if event.event == "tool_started"
+    )
+    web_step = next(step for step in plan_created.data["plan"] if step["tool_name"] == "web_search")
+    assert [
+        event.data["step"]["status"]
+        for event in events
+        if event.event == "plan_step_updated"
+        and event.data["step"]["step_id"] == web_step["step_id"]
+    ] == ["running", "completed"]
 
     run = await memory.get_run(events[-1].run_id)
     assert run is not None
     assert run.status == RunStatus.COMPLETED
     assert run.metrics.tool_call_count == 5
     assert run.metrics.llm_call_count == 4
+    assert [step.index for step in run.plan] == list(range(len(run.plan)))
+    assert [step.tool_name for step in run.plan] == [
+        "knowledge_search",
+        "web_search",
+        "schema_search",
+        "execute_sql",
+        "python_execute",
+        None,
+    ]
+    assert all(step.status == PlanStepStatus.COMPLETED for step in run.plan)
     assert {step.tool_name for step in run.trace if step.tool_name} >= {
         "knowledge_search",
         "web_search",
@@ -99,6 +122,10 @@ async def test_repeated_tool_call_fails_run_instead_of_looping() -> None:
     assert run is not None
     assert run.status == RunStatus.FAILED
     assert "Repeated tool call" in run.error
+    assert [step.status for step in run.plan] == [
+        PlanStepStatus.COMPLETED,
+        PlanStepStatus.FAILED,
+    ]
 
 
 class TokenHungryProvider(LLMProvider):
@@ -111,6 +138,38 @@ class TokenHungryProvider(LLMProvider):
             input_tokens=10,
             output_tokens=5,
         )
+
+
+class DuplicateCallIdProvider(LLMProvider):
+    name = "duplicate-call-id-test-provider"
+
+    async def decide(self, **_kwargs) -> AgentDecision:
+        return AgentDecision(
+            tool_calls=[
+                ToolCall(call_id="call_duplicate", name="knowledge_search"),
+                ToolCall(call_id="call_duplicate", name="web_search"),
+            ],
+            decision_summary="Provider returned conflicting tool call identifiers.",
+        )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_tool_call_ids_fail_without_executing_an_ambiguous_plan() -> None:
+    memory = InMemoryStore()
+    runtime = AgentRuntime(
+        settings=Settings(max_steps=2, run_timeout_seconds=5, tool_timeout_seconds=1),
+        provider=DuplicateCallIdProvider(),
+        registry=build_stub_registry(1),
+        store=memory,
+    )
+
+    events = [event async for event in runtime.stream(query="duplicate", conversation_id=None)]
+    run = await memory.get_run(events[-1].run_id)
+
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert run.metrics.tool_call_count == 0
+    assert "Duplicate tool call ID" in (run.error or "")
 
 
 @pytest.mark.asyncio
@@ -141,6 +200,8 @@ async def test_token_budget_stops_run_before_tools_or_another_llm_call() -> None
     assert run.metrics.budget_exhausted is True
     assert run.metrics.budget_reason == "Run token budget exhausted: 15/12 tokens"
     assert run.budget.token_limit == 12
+    assert run.plan
+    assert all(step.status == PlanStepStatus.FAILED for step in run.plan)
 
 
 @pytest.mark.asyncio

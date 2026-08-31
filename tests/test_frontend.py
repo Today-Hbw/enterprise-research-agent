@@ -21,6 +21,9 @@ def test_frontend_serves_explicit_inspector_controls_and_local_markdown_renderer
     assert 'aria-controls="inspector"' in html
     assert 'id="inspector-close"' in html
     assert 'id="inspector-backdrop"' in html
+    assert 'data-tab="plan"' in html
+    assert 'id="plan-pane"' in html
+    assert 'id="plan-list"' in html
     assert html.index("/static/markdown.js") < html.index("/static/app.js")
 
     styles = client.get("/static/styles.css").text
@@ -35,6 +38,9 @@ def test_frontend_connects_markdown_to_stored_and_streamed_assistant_messages() 
     assert "renderAssistantMarkdown(assistantNode, data.content)" in script
     assert 'window.matchMedia("(min-width: 701px) and (max-width: 980px)")' in script
     assert 'event.key === "Escape"' in script
+    assert 'event === "plan_created" || event === "plan_updated"' in script
+    assert 'event === "plan_step_updated"' in script
+    assert "renderPlan(run.plan)" in script
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")

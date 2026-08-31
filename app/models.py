@@ -22,6 +22,13 @@ class RunStatus(StrEnum):
     FAILED = "failed"
 
 
+class PlanStepStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 class MessageRole(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
@@ -127,6 +134,17 @@ class TraceStep(BaseModel):
     error: str | None = None
 
 
+class PlanStep(BaseModel):
+    step_id: str = Field(default_factory=lambda: new_id("plan_step"))
+    index: int = Field(ge=0)
+    title: str = Field(min_length=1, max_length=200)
+    description: str = Field(min_length=1, max_length=500)
+    status: PlanStepStatus = PlanStepStatus.PENDING
+    tool_name: str | None = None
+    call_id: str | None = None
+    error: str | None = None
+
+
 class RunMetrics(BaseModel):
     llm_call_count: int = 0
     tool_call_count: int = 0
@@ -180,6 +198,7 @@ class RunRecord(BaseModel):
     completed_at: datetime | None = None
     final_answer: str | None = None
     sources: list[Source] = Field(default_factory=list)
+    plan: list[PlanStep] = Field(default_factory=list)
     trace: list[TraceStep] = Field(default_factory=list)
     metrics: RunMetrics = Field(default_factory=RunMetrics)
     budget: RunBudget = Field(default_factory=RunBudget)

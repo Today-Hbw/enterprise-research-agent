@@ -10,6 +10,8 @@ from app.models import (
     AccessContext,
     Message,
     MessageRole,
+    PlanStep,
+    PlanStepStatus,
     RunBudget,
     RunRecord,
     RunStatus,
@@ -24,6 +26,41 @@ from app.tools.registry import ToolRegistry
 
 
 class AgentRuntime:
+    _PLAN_COPY = {
+        "knowledge_search": (
+            "Search internal knowledge",
+            "Retrieve authorized enterprise documents relevant to the request.",
+        ),
+        "web_search": (
+            "Discover public sources",
+            "Search for authoritative public evidence and candidate URLs.",
+        ),
+        "http_fetch": (
+            "Fetch a known source",
+            "Read the allowlisted URL through the bounded HTTP fetcher.",
+        ),
+        "schema_search": (
+            "Discover relevant data schema",
+            "Find the approved tables, fields, and relationships needed for analysis.",
+        ),
+        "execute_sql": (
+            "Query structured data",
+            "Run the validated read-only query against the approved database scope.",
+        ),
+        "python_execute": (
+            "Calculate deterministic metrics",
+            "Use the isolated calculation worker for precise derived values.",
+        ),
+        "browser": (
+            "Inspect an interactive page",
+            "Use the allowlisted browser worker for explicitly interactive content.",
+        ),
+        "mcp_invoke": (
+            "Read from an external system",
+            "Invoke the approved low-risk MCP tool through the server-side catalog.",
+        ),
+    }
+
     def __init__(
         self,
         *,
@@ -98,6 +135,10 @@ class AgentRuntime:
         finally:
             await self.provider.finish_run(run.run_id)
 
+        if run.status == RunStatus.FAILED:
+            for step in self._fail_incomplete_plan(run, run.error or "Agent run failed"):
+                yield event("plan_step_updated", step=step.model_dump(mode="json"))
+
         run.completed_at = utc_now()
         if run.trace:
             started = run.created_at.timestamp()
@@ -160,6 +201,17 @@ class AgentRuntime:
             )
 
             if decision.final_answer is not None:
+                plan_event = self._sync_plan(run, [])
+                if plan_event:
+                    await self.store.save_run(run)
+                    yield event_factory(
+                        plan_event, plan=[step.model_dump(mode="json") for step in run.plan]
+                    )
+                synthesis = self._synthesis_step(run)
+                synthesis.status = PlanStepStatus.COMPLETED
+                synthesis.error = None
+                await self.store.save_run(run)
+                yield event_factory("plan_step_updated", step=synthesis.model_dump(mode="json"))
                 self._mark_exhausted_budget(run)
                 run.final_answer = decision.final_answer
                 run.status = RunStatus.COMPLETED
@@ -167,7 +219,6 @@ class AgentRuntime:
                 yield event_factory("assistant_delta", content=decision.final_answer)
                 return
 
-            self._enforce_budget(run)
             fresh_calls = [
                 call for call in decision.tool_calls if call.signature not in call_signatures
             ]
@@ -176,9 +227,26 @@ class AgentRuntime:
             for call in fresh_calls:
                 call_signatures.add(call.signature)
 
+            plan_event = self._sync_plan(run, fresh_calls)
+            await self.store.save_run(run)
+            yield event_factory(
+                plan_event, plan=[step.model_dump(mode="json") for step in run.plan]
+            )
+
+            self._enforce_budget(run)
+
             semaphore = asyncio.Semaphore(self.settings.max_parallel_tools)
 
+            running_steps = []
             for call in fresh_calls:
+                plan_step = self._plan_step_for_call(run, call.call_id)
+                plan_step.status = PlanStepStatus.RUNNING
+                plan_step.error = None
+                running_steps.append(plan_step)
+            await self.store.save_run(run)
+
+            for call, plan_step in zip(fresh_calls, running_steps, strict=True):
+                yield event_factory("plan_step_updated", step=plan_step.model_dump(mode="json"))
                 yield event_factory(
                     "tool_started",
                     call_id=call.call_id,
@@ -215,8 +283,78 @@ class AgentRuntime:
                     duration_ms=duration_ms,
                     is_stub=self.registry.is_stub(call.name),
                 )
+                plan_step = self._plan_step_for_call(run, call.call_id)
+                plan_step.status = (
+                    PlanStepStatus.COMPLETED if result.success else PlanStepStatus.FAILED
+                )
+                plan_step.error = result.error
+                yield event_factory("plan_step_updated", step=plan_step.model_dump(mode="json"))
+            await self.store.save_run(run)
 
         raise RuntimeError(f"Agent reached max_steps={self.settings.max_steps}")
+
+    def _sync_plan(self, run: RunRecord, calls: list[ToolCall]) -> str | None:
+        created = not run.plan
+        if created:
+            run.plan.append(
+                PlanStep(
+                    index=0,
+                    title="Synthesize the final answer",
+                    description="Combine validated evidence into a cited, traceable response.",
+                )
+            )
+        synthesis = self._synthesis_step(run)
+        known_call_ids = {step.call_id for step in run.plan if step.call_id}
+        additions = []
+        for call in calls:
+            if call.call_id in known_call_ids:
+                raise RuntimeError(f"Duplicate tool call ID in run plan: {call.call_id}")
+            known_call_ids.add(call.call_id)
+            title, description = self._PLAN_COPY.get(
+                call.name,
+                (
+                    f"Run {call.name.replace('_', ' ')}",
+                    (
+                        "Execute the selected tool within its configured permission "
+                        "and timeout limits."
+                    ),
+                ),
+            )
+            additions.append(
+                PlanStep(
+                    index=0,
+                    title=title,
+                    description=description,
+                    tool_name=call.name,
+                    call_id=call.call_id,
+                )
+            )
+        if additions:
+            synthesis_index = run.plan.index(synthesis)
+            run.plan[synthesis_index:synthesis_index] = additions
+        for index, step in enumerate(run.plan):
+            step.index = index
+        if created:
+            return "plan_created"
+        return "plan_updated" if additions else None
+
+    @staticmethod
+    def _synthesis_step(run: RunRecord) -> PlanStep:
+        return next(step for step in run.plan if step.tool_name is None)
+
+    @staticmethod
+    def _plan_step_for_call(run: RunRecord, call_id: str) -> PlanStep:
+        return next(step for step in run.plan if step.call_id == call_id)
+
+    @staticmethod
+    def _fail_incomplete_plan(run: RunRecord, error: str) -> list[PlanStep]:
+        changed = []
+        for step in run.plan:
+            if step.status in {PlanStepStatus.PENDING, PlanStepStatus.RUNNING}:
+                step.status = PlanStepStatus.FAILED
+                step.error = error
+                changed.append(step)
+        return changed
 
     def _update_estimated_cost(self, run: RunRecord) -> None:
         input_rate = self.settings.llm_input_cost_per_million_tokens

@@ -156,6 +156,20 @@ button { color: inherit; }
 .dashboard-run-status { color: var(--accent); font: 700 8px/1 ui-monospace, monospace; text-transform: uppercase; }
 .dashboard-run-status.failed { color: #ff8e70; }
 .muted { color: var(--muted); }
+.plan-list { display: grid; gap: 10px; }
+.plan-step { display: grid; grid-template-columns: 28px 1fr; gap: 10px; padding: 12px; border: 1px solid var(--line); background: var(--surface-2); }
+.plan-step-index { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--line); color: var(--muted); font: 700 9px/1 ui-monospace, monospace; }
+.plan-step strong, .plan-step small, .plan-step em { display: block; }
+.plan-step strong { overflow-wrap: anywhere; font-size: 11px; }
+.plan-step p { margin: 5px 0 8px; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.plan-step small { color: var(--muted); font: 700 8px/1 ui-monospace, monospace; letter-spacing: .06em; text-transform: uppercase; }
+.plan-step em { margin-top: 6px; overflow-wrap: anywhere; color: var(--danger); font-size: 9px; font-style: normal; line-height: 1.4; }
+.plan-step.running { border-color: var(--accent); background: var(--accent-soft); }
+.plan-step.running .plan-step-index { border-color: var(--accent); color: var(--accent); }
+.plan-step.completed { opacity: .72; }
+.plan-step.completed .plan-step-index { border-color: var(--accent); background: var(--accent); color: var(--surface); }
+.plan-step.failed { border-color: var(--danger); }
+.plan-step.failed .plan-step-index { border-color: var(--danger); color: var(--danger); }
 .trace-list { position: relative; margin-top: 18px; padding-left: 18px; }
 .trace-list::before { content: ""; position: absolute; left: 4px; top: 4px; bottom: 4px; width: 1px; background: var(--line); }
 .trace-item { position: relative; margin-bottom: 18px; }

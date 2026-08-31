@@ -2,6 +2,7 @@ const state = {
   conversationId: null,
   running: false,
   sources: new Map(),
+  plan: [],
 };
 
 const elements = {
@@ -11,6 +12,7 @@ const elements = {
   messages: document.querySelector("#messages"),
   conversations: document.querySelector("#conversation-list"),
   trace: document.querySelector("#trace-list"),
+  plan: document.querySelector("#plan-list"),
   summary: document.querySelector("#run-summary"),
   sources: document.querySelector("#source-list"),
   sourceCount: document.querySelector("#source-count"),
@@ -86,6 +88,37 @@ function addTrace(title, description, type = "decision", meta = "") {
   elements.trace.append(item);
 }
 
+function renderPlan(plan) {
+  state.plan = plan || [];
+  if (!state.plan.length) {
+    elements.plan.classList.add("muted");
+    elements.plan.textContent = "Waiting for the first agent decision…";
+    return;
+  }
+  elements.plan.classList.remove("muted");
+  elements.plan.innerHTML = state.plan.map((step) => `
+    <article class="plan-step ${escapeHtml(step.status)}" data-plan-step-id="${escapeHtml(step.step_id)}">
+      <span class="plan-step-index">${Number(step.index) + 1}</span>
+      <div>
+        <strong>${escapeHtml(step.title)}</strong>
+        <p>${escapeHtml(step.description)}</p>
+        <small>${escapeHtml(step.status)}${step.tool_name ? ` · ${escapeHtml(step.tool_name)}` : ""}</small>
+        ${step.error ? `<em>${escapeHtml(step.error)}</em>` : ""}
+      </div>
+    </article>`).join("");
+}
+
+function updatePlanStep(step) {
+  const index = state.plan.findIndex((item) => item.step_id === step.step_id);
+  if (index === -1) {
+    state.plan.push(step);
+  } else {
+    state.plan[index] = step;
+  }
+  state.plan.sort((left, right) => left.index - right.index);
+  renderPlan(state.plan);
+}
+
 function addSources(sources) {
   for (const source of sources || []) {
     if (state.sources.has(source.source_id)) continue;
@@ -104,6 +137,7 @@ function addSources(sources) {
 
 function resetRun() {
   state.sources.clear();
+  renderPlan([]);
   elements.sources.innerHTML = "";
   elements.sourceCount.textContent = "0";
   elements.trace.innerHTML = "";
@@ -150,6 +184,7 @@ function renderRunSummary(run) {
 function renderStoredRun(run) {
   resetRun();
   renderRunSummary(run);
+  renderPlan(run.plan);
   let decisionNumber = 0;
   for (const step of run.trace) {
     if (!step.tool_name) decisionNumber += 1;
@@ -208,6 +243,10 @@ function handleEvent(payload, assistantNode) {
     addTrace("Run started", "Runtime limits and tool registry loaded.", "decision", payload.run_id);
   } else if (event === "agent_decision") {
     addTrace(`Agent decision · step ${data.step}`, data.summary);
+  } else if (event === "plan_created" || event === "plan_updated") {
+    renderPlan(data.plan);
+  } else if (event === "plan_step_updated") {
+    updatePlanStep(data.step);
   } else if (event === "tool_started") {
     addTrace(data.tool_name, "Executing deterministic placeholder tool…", "tool", data.call_id);
   } else if (event === "tool_completed") {
@@ -219,12 +258,14 @@ function handleEvent(payload, assistantNode) {
   } else if (event === "run_completed") {
     const run = data.run;
     renderRunSummary(run);
+    renderPlan(run.plan);
     loadDashboard();
   } else if (event === "run_failed") {
     assistantNode.classList.remove("thinking");
     assistantNode.textContent = `Run failed: ${data.error}`;
     if (data.run) {
       renderRunSummary(data.run);
+      renderPlan(data.run.plan);
     } else {
       elements.summary.textContent = `FAILED\n${data.error}`;
     }

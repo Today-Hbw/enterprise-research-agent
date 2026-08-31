@@ -27,6 +27,9 @@ def test_chat_api_returns_completed_traceable_run() -> None:
     assert payload["run"]["status"] == "completed"
     assert payload["run"]["trace"]
     assert payload["run"]["sources"]
+    assert payload["run"]["plan"]
+    assert payload["run"]["plan"][-1]["title"] == "Synthesize the final answer"
+    assert all(step["status"] == "completed" for step in payload["run"]["plan"])
 
 
 def test_stream_endpoint_uses_sse_protocol() -> None:
@@ -36,6 +39,8 @@ def test_stream_endpoint_uses_sse_protocol() -> None:
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: run_started" in body
+    assert "event: plan_created" in body
+    assert "event: plan_step_updated" in body
     assert "event: tool_completed" in body
     assert "event: run_completed" in body
 
@@ -54,6 +59,8 @@ def test_run_events_can_be_replayed_after_a_sequence() -> None:
 
     assert events.status_code == 200
     assert events.json()[0]["sequence"] == 2
+    assert any(event["event"] == "plan_created" for event in events.json())
+    assert any(event["event"] == "plan_step_updated" for event in events.json())
     assert events.json()[-1]["event"] == "run_completed"
 
 

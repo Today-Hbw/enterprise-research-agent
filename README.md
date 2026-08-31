@@ -15,7 +15,8 @@ A lightweight, traceable research agent based on the [PRD](https://app.notion.co
 - Optional Qdrant vector storage; SQL is available as an explicitly configured read-only PostgreSQL tool, while three execution tools remain placeholders
 - In-memory conversations and run records
 - Source citations, explainable execution trace, token/cost metrics, configurable run budgets, and latency/call counts
-- Tenant/principal-scoped Run Dashboard API and responsive three-panel UI for conversations, chat, sources, trace, and run metrics
+- Run-level high-level plans with live pending/running/completed/failed state, persistence, and replay
+- Tenant/principal-scoped Run Dashboard API and responsive three-panel UI for conversations, chat, plans, sources, trace, and run metrics
 - Explicit medium-screen Inspector drawer controls and built-in safe Markdown rendering for assistant answers
 - Offline Agent/Retrieval Evaluation with versionable JSON datasets, threshold gates, and machine-readable reports
 - Docker Compose and automated runtime/API/contract tests
@@ -33,7 +34,7 @@ flowchart LR
     REG --> SQL[Optional Read-only PostgreSQL]
     REG --> STUB[6 Deterministic Stub Tools]
     RT --> STORE[In-memory Store]
-    STORE --> OUT[SSE + Answer + Sources + Trace]
+    STORE --> OUT[SSE + Answer + Plan + Sources + Trace]
 ```
 
 The deterministic provider still exercises the real runtime behavior. Discovery tools run in parallel, schema discovery gates read-only SQL, SQL results gate Python analysis, and browser is only selected for explicit interactive intent.
@@ -233,7 +234,7 @@ HTTP_FETCH_MAX_BYTES=1000000
 HTTP_FETCH_MAX_REDIRECTS=3
 ```
 
-The fetcher permits HTTPS by default, rejects URL credentials and IP literals, requires every resolved address to be public, validates every redirect target again, accepts only HTML/plain text/JSON, and stops reading after the configured byte limit. `HTTP_FETCH_ALLOW_HTTP=true` is only for narrowly controlled development endpoints and should not be used in production. This is a defense-in-depth application control; production deployment should additionally enforce outbound egress rules and DNS protections at the network layer.
+The fetcher permits HTTPS by default, rejects URL credentials and IP literals, requires every resolved address to be public, validates every redirect target again, accepts only the documented bounded parser content types, and stops reading after the configured byte limit. `HTTP_FETCH_ALLOW_HTTP=true` is only for narrowly controlled development endpoints and should not be used in production. This is a defense-in-depth application control; production deployment should additionally enforce outbound egress rules and DNS protections at the network layer.
 
 ```bash
 curl -N -X POST http://localhost:8000/api/chat/stream \
@@ -241,7 +242,16 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
   -d '{"query":"调研市场并结合采购数据做分析"}'
 ```
 
-Events are sequenced and include `run_started`, `agent_decision`, `tool_started`, `tool_completed`, `assistant_delta`, and `run_completed` (or `run_failed`). The trace intentionally records decision summaries, not hidden chain-of-thought.
+Events are sequenced and include `run_started`, `agent_decision`, `plan_created`, `plan_updated`,
+`plan_step_updated`, `tool_started`, `tool_completed`, `assistant_delta`, and `run_completed` (or
+`run_failed`). The Plan tab appears after the first agent decision and before tool execution, then
+tracks each tool-level step plus final synthesis as pending, running, completed, or failed. Later
+agent decisions can insert newly discovered work before synthesis. Plans are stored on the Run and
+restored with historical runs and deterministic event replay.
+
+The plan is intentionally a high-level execution contract derived from selected tools. It does not
+expose hidden chain-of-thought, and it is not a separate speculative model call or a general workflow
+builder. The Trace tab continues to record decision summaries and actual tool outcomes.
 
 ## Agent and Retrieval Evaluation
 
@@ -296,6 +306,7 @@ python -m app.evaluation --dataset evals/demo.json
 - Tool execution has a server-side `TOOL_MAX_PERMISSION` ceiling (`high` by default); calls above it are rejected and retained in the run trace. High-risk browser behavior still has no approval workflow.
 - Run token/cost budgets are enforced between provider responses; they are not billing guarantees, and configured cost rates must be kept current by the operator.
 - The built-in evaluation runner is an offline structural regression suite; it does not claim production retrieval quality or semantic answer correctness.
+- Run plans are dynamic tool-level plans, not a complete up-front decomposition guarantee; later Agent decisions may append steps before synthesis.
 - The OpenAI API key is read only from configuration and is never included in API responses, traces, or logs.
 - State is process-local and disappears on restart.
 - Authentication, tenant provisioning, durable audit logs, and production rate limiting are not implemented.
