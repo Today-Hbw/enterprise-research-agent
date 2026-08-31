@@ -1,0 +1,156 @@
+{
+  "name": "offline-demo-regression",
+  "description": "Deterministic smoke suite for retrieval ranking, tool routing, citations, and run limits.",
+  "documents": [
+    {
+      "document_id": "procurement-policy",
+      "title": "Quarterly supplier review policy",
+      "content": "Strategic procurement policy requires a quarterly supplier review, approval controls, and supplier concentration monitoring.",
+      "knowledge_base_id": "policy",
+      "public": true,
+      "metadata": {
+        "domain": "procurement"
+      }
+    },
+    {
+      "document_id": "ai-market-brief",
+      "title": "AI infrastructure market brief",
+      "content": "Public market research tracks AI infrastructure demand, quarterly earnings, and supplier capacity trends.",
+      "knowledge_base_id": "research",
+      "public": true,
+      "metadata": {
+        "domain": "market"
+      }
+    },
+    {
+      "document_id": "browser-fallback-guide",
+      "title": "SaaS browser fallback guide",
+      "content": "Use the browser only for authenticated interactive SaaS workflows such as filtering a dashboard and exporting a CSV.",
+      "knowledge_base_id": "engineering",
+      "public": true,
+      "metadata": {
+        "domain": "browser"
+      }
+    }
+  ],
+  "retrieval_cases": [
+    {
+      "case_id": "retrieve-procurement-policy",
+      "query": "quarterly supplier review procurement policy",
+      "relevant_document_ids": [
+        "procurement-policy"
+      ],
+      "knowledge_base_id": "policy",
+      "top_k": 2
+    },
+    {
+      "case_id": "retrieve-ai-market-brief",
+      "query": "AI infrastructure demand quarterly market",
+      "relevant_document_ids": [
+        "ai-market-brief"
+      ],
+      "knowledge_base_id": "research",
+      "top_k": 2
+    }
+  ],
+  "agent_cases": [
+    {
+      "case_id": "route-research-and-procurement",
+      "query": "调研市场并结合采购数据做分析",
+      "expected_tools": [
+        "knowledge_search",
+        "web_search",
+        "schema_search",
+        "execute_sql",
+        "python_execute"
+      ],
+      "forbidden_tools": [
+        "http_fetch",
+        "browser",
+        "mcp_invoke"
+      ],
+      "min_source_count": 5,
+      "required_source_types": [
+        "document",
+        "web",
+        "sql"
+      ],
+      "require_citations": true,
+      "required_answer_terms": [
+        "Preliminary recommendation"
+      ],
+      "max_llm_calls": 4,
+      "max_tool_calls": 5
+    },
+    {
+      "case_id": "prefer-http-for-known-api",
+      "query": "读取这个 API 链接并总结网址内容",
+      "expected_tools": [
+        "knowledge_search",
+        "http_fetch"
+      ],
+      "forbidden_tools": [
+        "web_search",
+        "schema_search",
+        "browser",
+        "mcp_invoke"
+      ],
+      "min_source_count": 2,
+      "required_source_types": [
+        "document",
+        "api"
+      ],
+      "require_citations": true,
+      "max_llm_calls": 2,
+      "max_tool_calls": 2
+    },
+    {
+      "case_id": "use-browser-for-explicit-interaction",
+      "query": "登录 SaaS 后台并点击导出",
+      "expected_tools": [
+        "knowledge_search",
+        "web_search",
+        "browser"
+      ],
+      "forbidden_tools": [
+        "http_fetch",
+        "schema_search",
+        "mcp_invoke"
+      ],
+      "min_source_count": 3,
+      "required_source_types": [
+        "document",
+        "web",
+        "browser"
+      ],
+      "require_citations": true,
+      "max_llm_calls": 2,
+      "max_tool_calls": 3
+    }
+  ],
+  "retrieval_config": {
+    "embedding_dimensions": 64,
+    "chunk_size": 160,
+    "chunk_overlap": 20,
+    "ranking": "hybrid",
+    "hybrid_rrf_k": 60,
+    "reranker": "token_overlap",
+    "rerank_candidate_k": 10
+  },
+  "agent_config": {
+    "max_steps": 8,
+    "run_timeout_seconds": 10,
+    "tool_timeout_seconds": 2,
+    "max_parallel_tools": 4,
+    "tool_max_permission": "high"
+  },
+  "thresholds": {
+    "min_retrieval_recall_at_k": 1.0,
+    "min_retrieval_mrr": 1.0,
+    "min_retrieval_hit_rate": 1.0,
+    "min_agent_pass_rate": 1.0,
+    "min_agent_completion_rate": 1.0,
+    "min_agent_tool_recall": 1.0,
+    "min_agent_citation_rate": 1.0
+  }
+}

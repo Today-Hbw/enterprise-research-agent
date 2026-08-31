@@ -15,7 +15,13 @@ const elements = {
   sources: document.querySelector("#source-list"),
   sourceCount: document.querySelector("#source-count"),
   dashboard: document.querySelector("#dashboard-content"),
+  inspector: document.querySelector("#inspector"),
+  inspectorToggle: document.querySelector("#inspector-toggle"),
+  inspectorClose: document.querySelector("#inspector-close"),
+  inspectorBackdrop: document.querySelector("#inspector-backdrop"),
 };
+
+const mediumScreen = window.matchMedia("(min-width: 701px) and (max-width: 980px)");
 
 function escapeHtml(value) {
   return String(value)
@@ -30,12 +36,47 @@ function addMessage(role, content, pending = false) {
   document.querySelector(".empty-state")?.remove();
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
-  wrapper.innerHTML = `
-    <div class="message-label">${role === "user" ? "You" : "Research Agent"}</div>
-    <div class="message-content ${pending ? "thinking" : ""}">${escapeHtml(content)}</div>`;
+  const label = document.createElement("div");
+  label.className = "message-label";
+  label.textContent = role === "user" ? "You" : "Research Agent";
+  const message = document.createElement("div");
+  message.className = `message-content ${pending ? "thinking" : ""}`;
+  if (role === "assistant" && !pending) {
+    renderAssistantMarkdown(message, content);
+  } else {
+    message.textContent = content;
+  }
+  wrapper.append(label, message);
   elements.messages.append(wrapper);
   elements.messages.scrollTop = elements.messages.scrollHeight;
-  return wrapper.querySelector(".message-content");
+  return message;
+}
+
+function renderAssistantMarkdown(node, content) {
+  node.classList.add("markdown-body");
+  node.innerHTML = window.ResearchMarkdown.renderMarkdown(content);
+}
+
+function setInspectorOpen(open, returnFocus = false) {
+  const shouldOpen = mediumScreen.matches && open;
+  document.body.classList.toggle("inspector-open", shouldOpen);
+  elements.inspectorToggle.setAttribute("aria-expanded", String(shouldOpen));
+  if (mediumScreen.matches) {
+    elements.inspector.setAttribute("aria-hidden", String(!shouldOpen));
+    elements.inspector.inert = !shouldOpen;
+  } else {
+    elements.inspector.removeAttribute("aria-hidden");
+    elements.inspector.inert = false;
+  }
+  if (shouldOpen) {
+    elements.inspector.querySelector(".tab.active")?.focus();
+  } else if (returnFocus && mediumScreen.matches) {
+    elements.inspectorToggle.focus();
+  }
+}
+
+function syncInspectorMode() {
+  setInspectorOpen(false);
 }
 
 function addTrace(title, description, type = "decision", meta = "") {
@@ -174,7 +215,7 @@ function handleEvent(payload, assistantNode) {
     addSources(data.sources);
   } else if (event === "assistant_delta") {
     assistantNode.classList.remove("thinking");
-    assistantNode.textContent = data.content;
+    renderAssistantMarkdown(assistantNode, data.content);
   } else if (event === "run_completed") {
     const run = data.run;
     renderRunSummary(run);
@@ -293,10 +334,24 @@ elements.dashboard.addEventListener("click", (event) => {
 });
 document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
   document.querySelectorAll(".tab, .inspector-pane").forEach((item) => item.classList.remove("active"));
+  document.querySelectorAll(".tab").forEach((item) => item.setAttribute("aria-selected", "false"));
   tab.classList.add("active");
+  tab.setAttribute("aria-selected", "true");
   document.querySelector(`#${tab.dataset.tab}-pane`).classList.add("active");
   if (tab.dataset.tab === "dashboard") loadDashboard();
 }));
+elements.inspectorToggle.addEventListener("click", () => {
+  setInspectorOpen(elements.inspectorToggle.getAttribute("aria-expanded") !== "true", true);
+});
+elements.inspectorClose.addEventListener("click", () => setInspectorOpen(false, true));
+elements.inspectorBackdrop.addEventListener("click", () => setInspectorOpen(false, true));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && document.body.classList.contains("inspector-open")) {
+    setInspectorOpen(false, true);
+  }
+});
+mediumScreen.addEventListener("change", syncInspectorMode);
 
+syncInspectorMode();
 loadConversations();
 loadDashboard();

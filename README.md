@@ -16,6 +16,8 @@ A lightweight, traceable research agent based on the [PRD](https://app.notion.co
 - In-memory conversations and run records
 - Source citations, explainable execution trace, token/cost metrics, configurable run budgets, and latency/call counts
 - Tenant/principal-scoped Run Dashboard API and responsive three-panel UI for conversations, chat, sources, trace, and run metrics
+- Explicit medium-screen Inspector drawer controls and built-in safe Markdown rendering for assistant answers
+- Offline Agent/Retrieval Evaluation with versionable JSON datasets, threshold gates, and machine-readable reports
 - Docker Compose and automated runtime/API/contract tests
 
 ## Architecture
@@ -100,6 +102,18 @@ KNOWLEDGE_ADMIN_TOKEN=a_long_random_admin_token
 ```
 
 Open <http://localhost:8000>. API docs are available at <http://localhost:8000/docs>.
+
+### Frontend behavior
+
+The desktop layout keeps the three-column Conversation / Chat / Inspector workspace. At viewport
+widths from 701px through 980px, Inspector becomes an explicit drawer: use the header button to
+open it and the close button, backdrop, or Escape key to dismiss it. The compact mobile layout keeps
+Inspector hidden so Chat retains the available width.
+
+Assistant answers render a built-in Markdown subset covering headings, paragraphs, ordered and
+unordered lists, emphasis, inline and fenced code, blockquotes, dividers, and links. The renderer
+does not execute raw HTML or load a third-party client script; only HTTP(S) Markdown links become
+clickable. User messages and error text remain plain text.
 
 Docker Compose starts the agent and Qdrant with named-volume persistence. Its fallback secrets are for localhost development only; set both variables before exposing or sharing the stack:
 
@@ -202,11 +216,43 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 
 Events are sequenced and include `run_started`, `agent_decision`, `tool_started`, `tool_completed`, `assistant_delta`, and `run_completed` (or `run_failed`). The trace intentionally records decision summaries, not hidden chain-of-thought.
 
+## Agent and Retrieval Evaluation
+
+The repository includes a deterministic offline evaluation runner and a strict example dataset:
+
+```bash
+python -m app.evaluation \
+  --dataset evals/demo.json \
+  --output output/evaluation/demo-report.json
+```
+
+The command emits the same JSON report to stdout and returns exit code `1` when any configured
+threshold is missed. Use `--no-fail-on-threshold` for exploratory runs that should always return
+success.
+
+Retrieval cases index the dataset's documents into an isolated in-memory backend, run the configured
+semantic/hybrid/rerank path, and report macro Recall@K, Mean Reciprocal Rank, Hit Rate, and
+case-level ranked document IDs. Agent cases execute the real `AgentRuntime` with the deterministic
+provider, real Knowledge Search, and the existing fixed tools; they check:
+
+- completed Run status and expected/forbidden tool routing;
+- source count and required source types;
+- presence of numbered citations and optional required answer terms;
+- LLM/tool call and latency ceilings;
+- aggregate pass, completion, tool-recall, and citation rates.
+
+The dataset also defines regression thresholds, so the JSON file can be reviewed and versioned with
+code changes. This first slice intentionally does not use an LLM-as-a-judge, live network services,
+or a production embedding model. Citation evaluation checks traceability presence, not factual
+faithfulness; human or model-based answer-quality scoring can be added later without changing the
+current dataset/report boundary.
+
 ## Test
 
 ```bash
 pytest
 ruff check .
+python -m app.evaluation --dataset evals/demo.json
 ```
 
 ## Safety and current limitations
@@ -221,6 +267,7 @@ ruff check .
 - HTTP and browser tools never make network requests.
 - Tool execution has a server-side `TOOL_MAX_PERMISSION` ceiling (`high` by default); calls above it are rejected and retained in the run trace. High-risk browser behavior still has no approval workflow.
 - Run token/cost budgets are enforced between provider responses; they are not billing guarantees, and configured cost rates must be kept current by the operator.
+- The built-in evaluation runner is an offline structural regression suite; it does not claim production retrieval quality or semantic answer correctness.
 - The OpenAI API key is read only from configuration and is never included in API responses, traces, or logs.
 - State is process-local and disappears on restart.
 - Authentication, tenant provisioning, durable audit logs, and production rate limiting are not implemented.
