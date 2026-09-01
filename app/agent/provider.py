@@ -20,7 +20,7 @@ class ProviderProtocolError(RuntimeError):
 
 
 @dataclass
-class _OpenAIRunState:
+class _ResponsesRunState:
     previous_response_id: str
     pending_call_ids: set[str]
 
@@ -148,8 +148,8 @@ class DeterministicProvider(LLMProvider):
         )
 
 
-class OpenAIResponsesProvider(LLMProvider):
-    """OpenAI Responses API adapter for native function calling."""
+class ResponsesAPIProvider(LLMProvider):
+    """Shared adapter for providers implementing the OpenAI Responses protocol."""
 
     is_demo = False
 
@@ -160,18 +160,25 @@ class OpenAIResponsesProvider(LLMProvider):
         model: str,
         base_url: str,
         timeout_seconds: float,
+        provider_name: str,
+        api_key_env: str,
+        include_strict_tool_flag: bool,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         if not api_key.strip():
-            raise ProviderConfigurationError("OPENAI_API_KEY is required for LLM_PROVIDER=openai")
-        self.name = f"openai-responses:{model}"
+            raise ProviderConfigurationError(
+                f"{api_key_env} is required for LLM_PROVIDER={provider_name}"
+            )
+        self.name = f"{provider_name}-responses:{model}"
+        self._provider_name = provider_name
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
+        self._include_strict_tool_flag = include_strict_tool_flag
         self._client = http_client or httpx.AsyncClient(timeout=timeout_seconds)
         self._owns_client = http_client is None
         self._api_key = api_key
-        self._runs: dict[str, _OpenAIRunState] = {}
+        self._runs: dict[str, _ResponsesRunState] = {}
 
     async def decide(
         self,
@@ -206,7 +213,7 @@ class OpenAIResponsesProvider(LLMProvider):
             ]
             if not outputs:
                 raise ProviderProtocolError(
-                    "OpenAI provider is missing outputs for pending tool calls"
+                    f"{self._provider_name} provider is missing outputs for pending tool calls"
                 )
             payload["previous_response_id"] = state.previous_response_id
             payload["input"] = outputs
@@ -216,27 +223,29 @@ class OpenAIResponsesProvider(LLMProvider):
         calls = self._parse_tool_calls(response)
         input_tokens, output_tokens = self._usage(response)
         if calls:
-            self._runs[run_id] = _OpenAIRunState(
+            self._runs[run_id] = _ResponsesRunState(
                 previous_response_id=response_id,
                 pending_call_ids={call.call_id for call in calls},
             )
             return AgentDecision(
                 tool_calls=calls,
-                decision_summary=f"OpenAI Responses requested {len(calls)} tool call(s).",
+                decision_summary=(
+                    f"{self._provider_name} Responses requested {len(calls)} tool call(s)."
+                ),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 provider_response_id=response_id,
             )
 
-        output_text = response.get("output_text")
-        if not isinstance(output_text, str) or not output_text.strip():
+        output_text = self._parse_output_text(response)
+        if not output_text:
             raise ProviderProtocolError(
-                "OpenAI response contained neither function calls nor output_text"
+                f"{self._provider_name} response contained neither function calls nor output text"
             )
         self._runs.pop(run_id, None)
         return AgentDecision(
             final_answer=output_text,
-            decision_summary="OpenAI Responses returned a final answer.",
+            decision_summary=f"{self._provider_name} Responses returned a final answer.",
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             provider_response_id=response_id,
@@ -259,23 +268,28 @@ class OpenAIResponsesProvider(LLMProvider):
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ProviderProtocolError(f"OpenAI Responses request failed: {exc}") from exc
+            raise ProviderProtocolError(
+                f"{self._provider_name} Responses request failed: {exc}"
+            ) from exc
         body = response.json()
         if not isinstance(body, dict):
-            raise ProviderProtocolError("OpenAI Responses response must be a JSON object")
+            raise ProviderProtocolError(
+                f"{self._provider_name} Responses response must be a JSON object"
+            )
         if body.get("error"):
-            raise ProviderProtocolError("OpenAI Responses returned an API error")
+            raise ProviderProtocolError(f"{self._provider_name} Responses returned an API error")
         return body
 
-    @staticmethod
-    def _serialize_tool(spec: ToolSpec) -> dict[str, Any]:
-        return {
+    def _serialize_tool(self, spec: ToolSpec) -> dict[str, Any]:
+        tool: dict[str, Any] = {
             "type": "function",
             "name": spec.name,
             "description": spec.description,
             "parameters": spec.input_schema,
-            "strict": False,
         }
+        if self._include_strict_tool_flag:
+            tool["strict"] = False
+        return tool
 
     @staticmethod
     def _serialize_tool_output(result: ToolResult) -> dict[str, str]:
@@ -300,8 +314,8 @@ class OpenAIResponsesProvider(LLMProvider):
         for item in output:
             if not isinstance(item, dict) or item.get("type") != "function_call":
                 continue
-            call_id = OpenAIResponsesProvider._require_string(item, "call_id")
-            name = OpenAIResponsesProvider._require_string(item, "name")
+            call_id = ResponsesAPIProvider._require_string(item, "call_id")
+            name = ResponsesAPIProvider._require_string(item, "name")
             arguments_raw = item.get("arguments", "{}")
             if not isinstance(arguments_raw, str):
                 raise ProviderProtocolError(f"Tool call {name} arguments must be JSON text")
@@ -313,6 +327,34 @@ class OpenAIResponsesProvider(LLMProvider):
                 raise ProviderProtocolError(f"Tool call {name} arguments must be a JSON object")
             calls.append(ToolCall(call_id=call_id, name=name, arguments=arguments))
         return calls
+
+    @staticmethod
+    def _parse_output_text(response: dict[str, Any]) -> str:
+        output_text = response.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text
+
+        output = response.get("output", [])
+        if not isinstance(output, list):
+            raise ProviderProtocolError("Responses output must be a list")
+        messages: list[str] = []
+        for item in output:
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            content = item.get("content", [])
+            if not isinstance(content, list):
+                continue
+            parts = [
+                part["text"]
+                for part in content
+                if isinstance(part, dict)
+                and part.get("type") == "output_text"
+                and isinstance(part.get("text"), str)
+            ]
+            message = "".join(parts).strip()
+            if message:
+                messages.append(message)
+        return "\n".join(messages)
 
     @staticmethod
     def _usage(response: dict[str, Any]) -> tuple[int, int]:
@@ -345,13 +387,69 @@ class OpenAIResponsesProvider(LLMProvider):
         )
 
 
+class OpenAIResponsesProvider(ResponsesAPIProvider):
+    """OpenAI Responses API adapter for native function calling."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str,
+        timeout_seconds: float,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            provider_name="openai",
+            api_key_env="OPENAI_API_KEY",
+            include_strict_tool_flag=True,
+            http_client=http_client,
+        )
+
+
+class DoubaoResponsesProvider(ResponsesAPIProvider):
+    """Volcengine Ark Responses API adapter for Doubao models."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model: str,
+        base_url: str,
+        timeout_seconds: float,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> None:
+        super().__init__(
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            timeout_seconds=timeout_seconds,
+            provider_name="doubao",
+            api_key_env="DOUBAO_API_KEY",
+            include_strict_tool_flag=False,
+            http_client=http_client,
+        )
+
+
 def build_provider(settings: Settings) -> LLMProvider:
     if settings.llm_provider == "deterministic":
         return DeterministicProvider()
-    api_key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
-    return OpenAIResponsesProvider(
+    if settings.llm_provider == "openai":
+        api_key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
+        return OpenAIResponsesProvider(
+            api_key=api_key,
+            model=settings.openai_model,
+            base_url=settings.openai_base_url,
+            timeout_seconds=settings.openai_timeout_seconds,
+        )
+    api_key = settings.doubao_api_key.get_secret_value() if settings.doubao_api_key else ""
+    return DoubaoResponsesProvider(
         api_key=api_key,
-        model=settings.openai_model,
-        base_url=settings.openai_base_url,
-        timeout_seconds=settings.openai_timeout_seconds,
+        model=settings.doubao_model,
+        base_url=settings.doubao_base_url,
+        timeout_seconds=settings.doubao_timeout_seconds,
     )

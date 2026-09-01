@@ -3,16 +3,17 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f7fb" />
     <title>Enterprise Research Agent</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 fill=%22%23090c0b%22/><text x=%226%22 y=%2222%22 fill=%22%23c7ff52%22 font-size=%2214%22>ER</text></svg>" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect rx=%228%22 width=%2232%22 height=%2232%22 fill=%22%233157d5%22/><text x=%226%22 y=%2222%22 fill=%22white%22 font-size=%2214%22 font-family=%22Arial%22 font-weight=%22700%22>ER</text></svg>" />
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <header class="topbar">
       <div class="brand-mark" aria-hidden="true">ER</div>
-      <div>
+      <div class="brand-copy">
         <h1>Enterprise Research Agent</h1>
-        <p>Traceable multi-source research workspace</p>
+        <p>Evidence-backed research workspace</p>
       </div>
       <button
         id="inspector-toggle"
@@ -21,7 +22,7 @@
         aria-controls="inspector"
         aria-expanded="false"
       >
-        Inspector <span aria-hidden="true">⌁</span>
+        Inspector <span aria-hidden="true">↗</span>
       </button>
       <span class="demo-badge">DEMO · STUB TOOLS</span>
     </header>
@@ -49,16 +50,16 @@
         </div>
         <div id="messages" class="messages" aria-live="polite">
           <div class="empty-state">
-            <span class="empty-icon">⌁</span>
-            <h2>Start a traceable research run</h2>
-            <p>Ask a question that combines public research, internal policy, and procurement data.</p>
+            <span class="empty-icon" aria-hidden="true">R</span>
+            <h2>Research with clarity</h2>
+            <p>Combine public evidence, internal knowledge, and procurement data in one traceable answer.</p>
             <button class="prompt-chip" data-prompt="调研 NVIDIA 最近一季度 AI 业务表现，并结合内部 GPU 采购数据给出采购建议。">
-              Try the procurement research demo
+              Try the procurement research demo <span aria-hidden="true">→</span>
             </button>
           </div>
         </div>
         <form id="chat-form" class="composer">
-          <textarea id="query" rows="1" maxlength="10000" placeholder="Ask a research question…" required></textarea>
+          <textarea id="query" rows="1" maxlength="10000" placeholder="Ask a research question…" aria-label="Research question" required></textarea>
           <div class="composer-meta">
             <span>Enter to send · Shift+Enter for a new line</span>
             <button id="send" type="submit">Run research <span>↗</span></button>

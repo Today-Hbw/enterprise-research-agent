@@ -10,7 +10,7 @@ A lightweight, traceable research agent based on the [PRD](https://app.notion.co
 - Lightweight agent loop with max steps, total timeout, tool timeout, and repeated-call protection
 - Parallel independent tool calls with a concurrency limit
 - Unified tool registry, JSON schemas, permissions, results, and error boundaries
-- Replaceable LLM provider interface: deterministic offline planner or OpenAI Responses API
+- Replaceable LLM provider interface: deterministic offline planner, OpenAI, or Doubao Responses API
 - Real text ingestion, deterministic chunking, authorization filtering, and anchored citations
 - Optional Qdrant vector storage; SQL is available as an explicitly configured read-only PostgreSQL tool, while three execution tools remain placeholders
 - In-memory conversations and run records
@@ -53,18 +53,39 @@ OPENAI_MODEL=gpt-5-mini
 # Optional: OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
-The provider uses the [Responses API](https://developers.openai.com/api/reference/cli/resources/responses/methods/create)
+To enable Doubao through Volcengine Ark, create an API key in the Ark console and configure:
+
+```bash
+LLM_PROVIDER=doubao
+DOUBAO_API_KEY=your_ark_api_key
+DOUBAO_MODEL=doubao-seed-2-0-lite-260215
+# Optional: DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+```
+
+`DOUBAO_MODEL` may also be set to another model ID available to the configured Ark account. The
+integration follows Ark's
+[Responses API function-calling protocol](https://www.volcengine.com/docs/82379/1958524?lang=zh).
+
+The OpenAI and Doubao providers use the Responses API
 with the registry's JSON schemas as function tools. It preserves the model-issued `call_id`, returns
 tool results as `function_call_output` items with `previous_response_id`, permits parallel tool calls,
-and records input/output token totals in each run. This follows OpenAI's
+and records input/output token totals in each run. The OpenAI implementation follows the
 [function-calling guide](https://developers.openai.com/api/docs/guides/function-calling).
 
-The application fails fast if `LLM_PROVIDER=openai` is selected without `OPENAI_API_KEY`; it does not
-silently fall back to deterministic answers.
+The application fails fast when the selected live provider's API key is missing; it does not silently
+fall back to deterministic answers.
 
 ### Run budgets and cost estimates
 
-Token and cost controls are server-owned and optional:
+Each research run has an overall 120-second deadline by default. Override it per environment when
+longer or shorter runs are appropriate:
+
+```bash
+RUN_TIMEOUT_SECONDS=120
+```
+
+Accepted values are greater than 0 and no more than 300 seconds. Token and cost controls are
+server-owned and optional:
 
 ```bash
 RUN_TOKEN_BUDGET=50000

@@ -13,17 +13,23 @@ class Settings(BaseSettings):
     app_name: str = "Enterprise Research Agent"
     app_env: str = "development"
     max_steps: int = Field(default=8, ge=1, le=32)
-    run_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    run_timeout_seconds: float = Field(default=120, gt=0, le=300)
     run_token_budget: int | None = Field(default=None, ge=1)
     run_cost_budget_usd: float | None = Field(default=None, gt=0)
     tool_timeout_seconds: float = Field(default=5, gt=0, le=60)
     tool_max_permission: ToolPermission = ToolPermission.HIGH
     max_parallel_tools: int = Field(default=4, ge=1, le=16)
-    llm_provider: Literal["deterministic", "openai"] = "deterministic"
+    llm_provider: Literal["deterministic", "openai", "doubao"] = "deterministic"
     openai_api_key: SecretStr | None = None
     openai_model: str = Field(default="gpt-5-mini", min_length=1)
     openai_base_url: str = Field(default="https://api.openai.com/v1", min_length=1)
     openai_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    doubao_api_key: SecretStr | None = None
+    doubao_model: str = Field(default="doubao-seed-2-0-lite-260215", min_length=1)
+    doubao_base_url: str = Field(
+        default="https://ark.cn-beijing.volces.com/api/v3", min_length=1
+    )
+    doubao_timeout_seconds: float = Field(default=45, gt=0, le=300)
     llm_input_cost_per_million_tokens: float | None = Field(default=None, ge=0)
     llm_output_cost_per_million_tokens: float | None = Field(default=None, ge=0)
     knowledge_backend: Literal["memory", "qdrant"] = "memory"

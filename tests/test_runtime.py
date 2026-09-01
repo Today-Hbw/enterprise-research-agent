@@ -8,6 +8,18 @@ from app.store import InMemoryStore
 from app.tools.stubs import build_stub_registry
 
 
+def test_run_timeout_defaults_to_120_seconds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("RUN_TIMEOUT_SECONDS", raising=False)
+
+    assert Settings(_env_file=None).run_timeout_seconds == 120
+
+
+def test_run_timeout_can_be_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("RUN_TIMEOUT_SECONDS", "180")
+
+    assert Settings(_env_file=None).run_timeout_seconds == 180
+
+
 def build_runtime() -> tuple[AgentRuntime, InMemoryStore]:
     settings = Settings(
         max_steps=8,

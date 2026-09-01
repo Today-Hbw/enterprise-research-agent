@@ -23,7 +23,7 @@ const elements = {
   inspectorBackdrop: document.querySelector("#inspector-backdrop"),
 };
 
-const mediumScreen = window.matchMedia("(min-width: 701px) and (max-width: 980px)");
+const inspectorDrawerScreen = window.matchMedia("(max-width: 1180px)");
 
 function escapeHtml(value) {
   return String(value)
@@ -60,10 +60,10 @@ function renderAssistantMarkdown(node, content) {
 }
 
 function setInspectorOpen(open, returnFocus = false) {
-  const shouldOpen = mediumScreen.matches && open;
+  const shouldOpen = inspectorDrawerScreen.matches && open;
   document.body.classList.toggle("inspector-open", shouldOpen);
   elements.inspectorToggle.setAttribute("aria-expanded", String(shouldOpen));
-  if (mediumScreen.matches) {
+  if (inspectorDrawerScreen.matches) {
     elements.inspector.setAttribute("aria-hidden", String(!shouldOpen));
     elements.inspector.inert = !shouldOpen;
   } else {
@@ -72,7 +72,7 @@ function setInspectorOpen(open, returnFocus = false) {
   }
   if (shouldOpen) {
     elements.inspector.querySelector(".tab.active")?.focus();
-  } else if (returnFocus && mediumScreen.matches) {
+  } else if (returnFocus && inspectorDrawerScreen.matches) {
     elements.inspectorToggle.focus();
   }
 }
@@ -359,7 +359,7 @@ elements.query.addEventListener("input", () => {
 document.querySelector(".prompt-chip").addEventListener("click", (event) => submitQuery(event.currentTarget.dataset.prompt));
 document.querySelector("#new-chat").addEventListener("click", () => {
   state.conversationId = null;
-  elements.messages.innerHTML = `<div class="empty-state"><span class="empty-icon">⌁</span><h2>New research run</h2><p>Start a fresh in-memory conversation.</p></div>`;
+  elements.messages.innerHTML = `<div class="empty-state"><span class="empty-icon" aria-hidden="true">R</span><h2>New research run</h2><p>Start a fresh in-memory conversation.</p></div>`;
   resetRun();
   elements.summary.textContent = "No active run";
   elements.summary.classList.add("muted");
@@ -391,7 +391,7 @@ document.addEventListener("keydown", (event) => {
     setInspectorOpen(false, true);
   }
 });
-mediumScreen.addEventListener("change", syncInspectorMode);
+inspectorDrawerScreen.addEventListener("change", syncInspectorMode);
 
 syncInspectorMode();
 loadConversations();
