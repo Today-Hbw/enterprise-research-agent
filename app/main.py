@@ -39,6 +39,7 @@ from app.models import (
     ToolSpec,
 )
 from app.postgres_store import PostgresStore
+from app.rag_platform_client import RagPlatformClient
 from app.store import store as memory_store
 from app.tools.browser import PlaywrightBrowserTool
 from app.tools.knowledge import KnowledgeSearchTool
@@ -67,6 +68,13 @@ if settings.knowledge_backend == "qdrant":
         collection=settings.qdrant_collection,
         dimensions=settings.knowledge_embedding_dimensions,
         api_key=(settings.qdrant_api_key.get_secret_value() if settings.qdrant_api_key else None),
+    )
+elif settings.knowledge_backend == "rag-platform":
+    knowledge_backend = RagPlatformClient(
+        base_url=settings.rag_platform_base_url,
+        api_key=(settings.rag_platform_api_key.get_secret_value() if settings.rag_platform_api_key else None),
+        timeout=settings.rag_platform_timeout_seconds,
+        max_retries=settings.rag_platform_max_retries,
     )
 else:
     knowledge_backend = InMemoryKnowledgeBackend()

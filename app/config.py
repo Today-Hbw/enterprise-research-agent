@@ -32,7 +32,11 @@ class Settings(BaseSettings):
     doubao_timeout_seconds: float = Field(default=45, gt=0, le=300)
     llm_input_cost_per_million_tokens: float | None = Field(default=None, ge=0)
     llm_output_cost_per_million_tokens: float | None = Field(default=None, ge=0)
-    knowledge_backend: Literal["memory", "qdrant"] = "memory"
+    knowledge_backend: Literal["memory", "qdrant", "rag-platform"] = "memory"
+    rag_platform_base_url: str = Field(default="http://localhost:8001", min_length=1)
+    rag_platform_api_key: SecretStr | None = None
+    rag_platform_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    rag_platform_max_retries: int = Field(default=2, ge=0, le=5)
     knowledge_default_tenant: str = Field(default="demo", min_length=1, max_length=128)
     knowledge_default_principal: str = Field(default="demo-user", min_length=1, max_length=128)
     knowledge_admin_token: SecretStr | None = None
