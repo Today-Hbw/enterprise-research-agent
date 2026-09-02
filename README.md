@@ -1,261 +1,169 @@
 # Enterprise Research Agent
 
-A lightweight, traceable research agent based on the [PRD](https://app.notion.com/p/3c897d4ad24781f698eefce7533cc444). The current release includes controlled knowledge ingestion and retrieval while keeping the remaining external capabilities deterministic and offline.
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Demo boundary: Knowledge Search is real by default. Web Search and HTTP Fetch can be explicitly enabled with server-side configuration; Python, Browser, and MCP remain fixed placeholder tools. SQL can be explicitly enabled with a read-only PostgreSQL configuration. The local deterministic embedding is intended for development, not production semantic quality.
+一个轻量、可追踪、可扩展的企业研究 Agent。它把 LLM、企业知识库、公开网络、只读数据库、受限计算、浏览器和 MCP 工具统一到同一套运行时中，并为每次研究任务保留计划、来源、执行轨迹、用量与成本信息。
 
-## What works
+项目默认使用确定性离线模式：无需 API Key、不会访问外部服务，安装后即可体验完整的 Agent 调度与界面。需要真实能力时，可以逐项启用 OpenAI、豆包、Qdrant、RAG Platform、Brave Search、PostgreSQL、Playwright、Redis 或 MCP，而无需重写 Agent 核心。
 
-- FastAPI chat API and POST-based SSE streaming
-- Lightweight agent loop with max steps, total timeout, tool timeout, and repeated-call protection
-- Parallel independent tool calls with a concurrency limit
-- Unified tool registry, JSON schemas, permissions, results, and error boundaries
-- Replaceable LLM provider interface: deterministic offline planner, OpenAI, or Doubao Responses API
-- Real text ingestion, deterministic chunking, authorization filtering, and anchored citations
-- Optional Qdrant vector storage; SQL is available as an explicitly configured read-only PostgreSQL tool, while three execution tools remain placeholders
-- In-memory conversations and run records
-- Source citations, explainable execution trace, token/cost metrics, configurable run budgets, and latency/call counts
-- Run-level high-level plans with live pending/running/completed/failed state, persistence, and replay
-- Tenant/principal-scoped Run Dashboard API and responsive three-panel UI for conversations, chat, plans, sources, trace, and run metrics
-- Explicit medium-screen Inspector drawer controls and built-in safe Markdown rendering for assistant answers
-- Offline Agent/Retrieval Evaluation with versionable JSON datasets, threshold gates, and machine-readable reports
-- Docker Compose and automated runtime/API/contract tests
+> An open-source, traceable enterprise research agent that runs fully offline by default and supports opt-in production integrations.
 
-## Architecture
+## 核心特性
+
+- **开箱即用**：默认离线 Planner 与 Stub 工具不依赖外部账号，适合开发、演示和测试。
+- **全程可追踪**：同步与 SSE 流式 API 都会返回计划、来源、工具轨迹、延迟、Token 和成本估算。
+- **知识检索可控**：支持文本摄入、URL 导入、确定性分块、授权过滤、锚定引用、混合检索和重排。
+- **工具边界清晰**：统一 JSON Schema、权限等级、超时、并发限制、重复调用保护和错误边界。
+- **真实集成按需启用**：所有外部能力默认关闭，通过服务端配置、域名白名单或只读权限显式开启。
+- **内置评估与界面**：提供离线 Agent/Retrieval 评估，以及会话、计划、来源、轨迹和指标三栏 UI。
+
+## 能力矩阵
+
+| 能力 | 默认模式 | 可选真实后端 |
+|---|---|---|
+| LLM | 确定性离线 Planner | OpenAI、豆包 Responses API |
+| 知识库 | 内存存储 | Qdrant、RAG Platform HTTP API |
+| 检索 | 语义检索 | RRF 混合检索、Token overlap 重排 |
+| Web | 固定响应 Stub | Brave Search、安全 HTTP Fetch |
+| 数据分析 | SQL / Python Stub | 只读 PostgreSQL、受限表达式计算 |
+| 扩展工具 | Browser / MCP Stub | Playwright、服务端配置的 HTTPS MCP |
+| 状态与事件 | 进程内存 | PostgreSQL、Redis |
+
+## 工作原理
 
 ```mermaid
 flowchart LR
-    UI[Web UI or API Client] --> API[FastAPI]
-    API --> RT[Agent Runtime]
-    RT --> LLM[LLM Provider Interface]
-    RT --> REG[Tool Registry]
-    REG --> KNOW[Knowledge Search]
-    KNOW --> QDRANT[Memory or Qdrant]
-    REG --> SQL[Optional Read-only PostgreSQL]
-    REG --> STUB[6 Deterministic Stub Tools]
-    RT --> STORE[In-memory Store]
-    STORE --> OUT[SSE + Answer + Plan + Sources + Trace]
+    Client[Web UI / API] --> API[FastAPI + SSE]
+    API --> Runtime[Agent Runtime]
+    Runtime --> LLM[Deterministic / OpenAI / Doubao]
+    Runtime --> Registry[Tool Registry]
+    Registry --> Tools[Knowledge / Web / SQL / Python / Browser / MCP]
+    Tools --> Backends[Memory / Qdrant / RAG Platform / PostgreSQL]
+    Runtime --> Result[Plan + Sources + Trace + Metrics]
 ```
 
-The deterministic provider still exercises the real runtime behavior. Discovery tools run in parallel, schema discovery gates read-only SQL, SQL results gate Python analysis, and browser is only selected for explicit interactive intent.
+运行时限制最大步骤数、总时长、单工具时长、并发数和重复调用；工具权限上限、Token 预算与成本预算均由服务端控制。高层计划随执行实时更新，但不会暴露模型的隐藏思维过程。
 
-## LLM provider modes
+## 快速开始
 
-The default remains `LLM_PROVIDER=deterministic`, so the application runs without a key and every
-external tool remains a fixed-response demo stub.
-
-To enable the OpenAI provider, set these environment variables locally (never commit the key):
+要求 Python 3.12 或 3.13。
 
 ```bash
-LLM_PROVIDER=openai
-OPENAI_API_KEY=your_api_key
-OPENAI_MODEL=gpt-5-mini
-# Optional: OPENAI_BASE_URL=https://api.openai.com/v1
-```
-
-To enable Doubao through Volcengine Ark, create an API key in the Ark console and configure:
-
-```bash
-LLM_PROVIDER=doubao
-DOUBAO_API_KEY=your_ark_api_key
-DOUBAO_MODEL=doubao-seed-2-0-lite-260215
-# Optional: DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-```
-
-`DOUBAO_MODEL` may also be set to another model ID available to the configured Ark account. The
-integration follows Ark's
-[Responses API function-calling protocol](https://www.volcengine.com/docs/82379/1958524?lang=zh).
-
-The OpenAI and Doubao providers use the Responses API
-with the registry's JSON schemas as function tools. It preserves the model-issued `call_id`, returns
-tool results as `function_call_output` items with `previous_response_id`, permits parallel tool calls,
-and records input/output token totals in each run. The OpenAI implementation follows the
-[function-calling guide](https://developers.openai.com/api/docs/guides/function-calling).
-
-The application fails fast when the selected live provider's API key is missing; it does not silently
-fall back to deterministic answers.
-
-### Run budgets and cost estimates
-
-Each research run has an overall 120-second deadline by default. Override it per environment when
-longer or shorter runs are appropriate:
-
-```bash
-RUN_TIMEOUT_SECONDS=120
-```
-
-Accepted values are greater than 0 and no more than 300 seconds. Token and cost controls are
-server-owned and optional:
-
-```bash
-RUN_TOKEN_BUDGET=50000
-RUN_COST_BUDGET_USD=1.00
-LLM_INPUT_COST_PER_MILLION_TOKENS=0.25
-LLM_OUTPUT_COST_PER_MILLION_TOKENS=2.00
-```
-
-Pricing is intentionally operator-supplied because it varies by provider, model, contract, and time.
-The input/output rates must be configured together; every Run then records an estimated USD cost from
-reported input/output usage. The runtime checks configured ceilings before tool execution and before
-each subsequent model
-call, marks the persisted Run as budget-exhausted, and stops further work. A provider response can
-cross the remaining ceiling because the exact input usage is only known after that response returns;
-if it already contains the final answer, the answer is retained and the over-budget state is visible.
-
-## Run locally
-
-Python 3.12 or 3.13 is recommended. Python 3.14 may not yet be supported by every pinned dependency.
-
-```bash
+git clone https://github.com/Today-Hbw/enterprise-research-agent.git
+cd enterprise-research-agent
 python -m venv .venv
-# PowerShell: .venv\Scripts\Activate.ps1
-# macOS/Linux: source .venv/bin/activate
+```
+
+```powershell
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+```
+
+```bash
+# macOS / Linux
+source .venv/bin/activate
+```
+
+```bash
 pip install -e ".[dev]"
 uvicorn app.main:app --reload
 ```
 
-The default `KNOWLEDGE_BACKEND=memory` needs no external service. To use Qdrant, configure:
+- Web UI：<http://localhost:8000>
+- OpenAPI：<http://localhost:8000/docs>
+- 健康检查：<http://localhost:8000/api/health>
 
-```bash
-KNOWLEDGE_BACKEND=qdrant
-QDRANT_URL=http://localhost:6333
-QDRANT_API_KEY=your_qdrant_api_key
-KNOWLEDGE_ADMIN_TOKEN=a_long_random_admin_token
-```
+此时使用完全离线的默认配置，可直接观察计划、并行工具调用、来源引用和执行轨迹。
 
-Open <http://localhost:8000>. API docs are available at <http://localhost:8000/docs>.
-
-### Frontend behavior
-
-The desktop layout keeps the three-column Conversation / Chat / Inspector workspace. At viewport
-widths from 701px through 980px, Inspector becomes an explicit drawer: use the header button to
-open it and the close button, backdrop, or Escape key to dismiss it. The compact mobile layout keeps
-Inspector hidden so Chat retains the available width.
-
-Assistant answers render a built-in Markdown subset covering headings, paragraphs, ordered and
-unordered lists, emphasis, inline and fenced code, blockquotes, dividers, and links. The renderer
-does not execute raw HTML or load a third-party client script; only HTTP(S) Markdown links become
-clickable. User messages and error text remain plain text.
-
-Docker Compose starts the agent and Qdrant with named-volume persistence. Its fallback secrets are for localhost development only; set both variables before exposing or sharing the stack:
-
-```bash
-KNOWLEDGE_ADMIN_TOKEN=replace-me QDRANT_API_KEY=replace-me docker compose up --build
-```
-
-### Controlled knowledge ingestion
-
-Ingestion is disabled unless `KNOWLEDGE_ADMIN_TOKEN` is configured:
-
-
-```bash
-curl -X POST http://localhost:8000/api/knowledge/documents \
-  -H "Content-Type: application/json" \
-  -H "X-Knowledge-Admin-Token: $KNOWLEDGE_ADMIN_TOKEN" \
-  -H "X-Tenant-Id: demo" \
-  -H "X-Principal-Ids: demo-user" \
-  -d '{"title":"Supplier policy","content":"Quarterly review is required.","knowledge_base_id":"policy","allowed_principal_ids":["demo-user"]}'
-```
-
-`X-Tenant-Id` and `X-Principal-Ids` are ignored by default. Set `KNOWLEDGE_TRUST_ACCESS_HEADERS=true` only behind an authenticated gateway that removes caller-supplied versions and injects verified identity. This project does not yet implement authentication or a tenant directory.
-
-Knowledge citations include `document_id`, `chunk_id`, `knowledge_base_id`, `char_start`, `char_end`, score, and the exact snippet. Character spans index the original submitted text.
-
-### URL download, parse, and RAG import
-
-URL import is available only when both controlled knowledge ingestion and the safe HTTP backend are
-enabled. It reuses the HTTP host allowlist, public-IP DNS validation, redirect checks, response-size
-limit, and HTTPS-only default before parsing and indexing the document:
-
-```bash
-curl -X POST http://localhost:8000/api/knowledge/import-url \
-  -H "Content-Type: application/json" \
-  -H "X-Knowledge-Admin-Token: $KNOWLEDGE_ADMIN_TOKEN" \
-  -H "X-Tenant-Id: demo" \
-  -H "X-Principal-Ids: demo-user" \
-  -d '{"url":"https://docs.example.com/policy.pdf","knowledge_base_id":"policy"}'
-```
-
-Supported response types are UTF-8 plain text and Markdown, HTML, CSV, JSON/JSON-LD, and PDF.
-`HTTP_FETCH_MAX_BYTES` bounds the downloaded body and `KNOWLEDGE_IMPORT_MAX_PDF_PAGES` bounds PDF
-work. Parsed text is also capped at the knowledge document limit. Encrypted PDFs, image-only/scanned
-PDFs without extractable text, ambiguous content types, and non-UTF-8 text are rejected; OCR and
-office document formats are future extensions.
-
-The import response includes the final redirected URL, detected content type, sanitized filename,
-content SHA-256, document ID, and chunk count. The document ID is derived from tenant, source,
-content, metadata, and access settings, so repeating an identical import safely upserts the same
-document/chunk IDs. Changed content or permissions produce a different document ID.
-
-Set `KNOWLEDGE_RANKING=hybrid` with the in-memory backend to fuse semantic and title/content keyword rankings using Reciprocal Rank Fusion. `KNOWLEDGE_HYBRID_RRF_K` tunes the fusion constant (default `60`). Set `KNOWLEDGE_RERANKER=token_overlap` to re-rank the configured candidate pool deterministically by query overlap in title and content; it is disabled by default. Metadata can be attached at ingestion and filtered only through server-configured KNOWLEDGE_METADATA_FILTER_KEYS; empty configuration disables metadata filters. Qdrant remains explicitly semantic-only until its sparse-vector/text-index path is configured.
-
-To start the local stack with development defaults:
+### Docker Compose
 
 ```bash
 docker compose up --build
 ```
 
-## API
+Compose 会在本机启动 Agent 与 Qdrant。回退密钥仅用于本地开发；对外部署前必须设置强随机的 `KNOWLEDGE_ADMIN_TOKEN` 和 `QDRANT_API_KEY`。
 
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/health` | Health and demo-mode status |
-| `GET` | `/api/tools` | Tool catalog and JSON schemas |
-| `POST` | `/api/knowledge/documents` | Admin-token protected text ingestion |
-| `POST` | `/api/knowledge/import-url` | Admin-token protected safe URL download, parse, and RAG ingestion |
-| `POST` | `/api/chat` | Run synchronously and return a complete run |
-| `POST` | `/api/chat/stream` | Stream ordered SSE events |
-| `GET` | `/api/conversations` | List in-memory conversations |
-| `GET` | `/api/conversations/{id}` | Read one conversation |
-| `GET` | `/api/runs?limit=20` | Aggregate scoped run/token/cost metrics and recent Run summaries |
-| `GET` | `/api/runs/{id}` | Read a traceable run |
+## 配置真实能力
 
-Example:
-### Isolated Python calculation
-
-`PYTHON_BACKEND=stub` remains the default. To enable deterministic calculations, set:
+先复制示例配置；不要提交含密钥的 `.env`：
 
 ```bash
-PYTHON_BACKEND=isolated
-PYTHON_WORKER_TIMEOUT_SECONDS=5
-PYTHON_WORKER_MAX_OUTPUT_BYTES=65536
+cp .env.example .env
 ```
 
-The enabled tool launches a separate `python -I -S` process in a fresh temporary working directory. It accepts only a bounded arithmetic/comparison expression and explicitly supplied scalar or numeric-sequence variables; imports, attribute access, calls, assignments, files, and networking are rejected by an AST allowlist. The parent enforces input/output caps and terminates the worker at the configured timeout. The expression-only contract intentionally bounds CPU and memory work at the application layer; OS-level cgroup/Job Object resource caps are a deployment hardening follow-up.
-### Read-only PostgreSQL schema retrieval and SQL
-
-SQL stays in `stub` mode unless configured. Enabling it replaces both `schema_search` and `execute_sql` with a PostgreSQL-backed implementation:
-
-```bash
-SQL_BACKEND=postgres
-POSTGRES_DSN=postgresql://research_readonly:replace-me@localhost:5432/research
-POSTGRES_ALLOWED_SCHEMAS=public,analytics
-POSTGRES_QUERY_TIMEOUT_MS=5000
-POSTGRES_MAX_ROWS=500
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
 ```
 
-The configured database role must independently be read-only and limited to the approved schemas. Before execution, SQLGlot parses exactly one AST and rejects mutations, DDL, `SELECT INTO`, locking clauses, unapproved schemas, and unqualified tables when `public` is not permitted. Each query runs in a PostgreSQL read-only transaction with a local statement timeout, receives an enforced row cap, and creates an in-process audit event containing only a statement hash, tenant ID, row count, and truncation flag. This release intentionally does not persist audit events; durable audit storage remains part of the persistence milestone.
-### Public Web Search and safe HTTP Fetch
+常用配置示例：
 
-Both capabilities remain `stub` by default, so local development and offline tests do not make network requests. To enable Brave Search, obtain a server-side subscription token and set:
+```dotenv
+# OpenAI；也可使用 LLM_PROVIDER=doubao 与对应 DOUBAO_* 配置
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your_api_key
+OPENAI_MODEL=gpt-5-mini
 
-```bash
+# Qdrant
+KNOWLEDGE_BACKEND=qdrant
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=your_qdrant_api_key
+
+# RAG Platform 需要 hybrid 检索与 knowledge_base_id
+# KNOWLEDGE_BACKEND=rag-platform
+# KNOWLEDGE_RANKING=hybrid
+# RAG_PLATFORM_BASE_URL=http://localhost:8001
+# RAG_PLATFORM_API_KEY=your_api_key
+
+# Brave Search
 WEB_SEARCH_BACKEND=brave
 BRAVE_SEARCH_API_KEY=your_brave_subscription_token
+
+# 只读 PostgreSQL
+SQL_BACKEND=postgres
+POSTGRES_DSN=postgresql://research_readonly:password@localhost:5432/research
+POSTGRES_ALLOWED_SCHEMAS=public,analytics
+
+# 可选受限计算与浏览器
+PYTHON_BACKEND=isolated
+BROWSER_BACKEND=playwright
+BROWSER_ALLOWED_HOSTS=app.example.com,.approved.example
 ```
 
-The provider calls Brave's Web Search endpoint with the token in `X-Subscription-Token`; the tool schema, trace, API response, and citations never contain that secret. Brave documents this endpoint and header in its [Web Search API reference](https://api-dashboard.search.brave.com/api-reference/web/search/get) and [authentication guide](https://api-dashboard.search.brave.com/documentation/guides/authentication).
+启用真实 LLM 后，缺少 API Key 会直接启动失败，不会静默降级。数据库账号本身也必须只拥有允许 Schema 的读取权限。
 
-HTTP Fetch is separately enabled and requires an explicit allowlist. Use only domains controlled or approved by your organization:
+### 受控知识摄入
+
+设置 `KNOWLEDGE_ADMIN_TOKEN` 后才能写入知识库：
 
 ```bash
-HTTP_FETCH_BACKEND=safe
-HTTP_ALLOWED_HOSTS=www.example.com,.approved.example
-HTTP_FETCH_MAX_BYTES=1000000
-HTTP_FETCH_MAX_REDIRECTS=3
+curl -X POST http://localhost:8000/api/knowledge/documents \
+  -H "Content-Type: application/json" \
+  -H "X-Knowledge-Admin-Token: replace-with-a-long-random-secret" \
+  -d '{"title":"Supplier policy","content":"Quarterly review is required.","knowledge_base_id":"policy","allowed_principal_ids":["demo-user"]}'
 ```
 
-The fetcher permits HTTPS by default, rejects URL credentials and IP literals, requires every resolved address to be public, validates every redirect target again, accepts only the documented bounded parser content types, and stops reading after the configured byte limit. `HTTP_FETCH_ALLOW_HTTP=true` is only for narrowly controlled development endpoints and should not be used in production. This is a defense-in-depth application control; production deployment should additionally enforce outbound egress rules and DNS protections at the network layer.
+URL 导入还需设置 `HTTP_FETCH_BACKEND=safe` 和 `HTTP_ALLOWED_HOSTS`。支持 UTF-8 文本、Markdown、HTML、CSV、JSON/JSON-LD 和可提取文本的 PDF；加密 PDF、纯扫描 PDF 与 Office 文档暂不支持。
+
+更多配置见 [`.env.example`](.env.example) 和[部署配置](docs/部署配置.md)。
+
+## API
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| `GET` | `/api/health` | 服务状态与当前模式 |
+| `GET` | `/api/tools` | 工具目录、Schema 与权限 |
+| `POST` | `/api/knowledge/documents` | 摄入文本知识 |
+| `POST` | `/api/knowledge/import-url` | 安全下载、解析并导入 URL |
+| `POST` | `/api/chat` | 同步研究任务 |
+| `POST` | `/api/chat/stream` | SSE 流式研究任务 |
+| `GET` | `/api/conversations` | 查询会话列表 |
+| `GET` | `/api/conversations/{id}` | 查询单个会话 |
+| `GET` | `/api/runs` | 查询 Run 汇总与指标 |
+| `GET` | `/api/runs/{id}` | 查询单个 Run 与完整轨迹 |
+| `GET` | `/api/runs/{id}/events` | 重放 Run 事件 |
 
 ```bash
 curl -N -X POST http://localhost:8000/api/chat/stream \
@@ -263,83 +171,40 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
   -d '{"query":"调研市场并结合采购数据做分析"}'
 ```
 
-Events are sequenced and include `run_started`, `agent_decision`, `plan_created`, `plan_updated`,
-`plan_step_updated`, `tool_started`, `tool_completed`, `assistant_delta`, and `run_completed` (or
-`run_failed`). The Plan tab appears after the first agent decision and before tool execution, then
-tracks each tool-level step plus final synthesis as pending, running, completed, or failed. Later
-agent decisions can insert newly discovered work before synthesis. Plans are stored on the Run and
-restored with historical runs and deterministic event replay.
-
-The plan is intentionally a high-level execution contract derived from selected tools. It does not
-expose hidden chain-of-thought, and it is not a separate speculative model call or a general workflow
-builder. The Trace tab continues to record decision summaries and actual tool outcomes.
-
-## Agent and Retrieval Evaluation
-
-The repository includes a deterministic offline evaluation runner and a strict example dataset:
-
-```bash
-python -m app.evaluation \
-  --dataset evals/demo.json \
-  --output output/evaluation/demo-report.json
-```
-
-The command emits the same JSON report to stdout and returns exit code `1` when any configured
-threshold is missed. Use `--no-fail-on-threshold` for exploratory runs that should always return
-success.
-
-Retrieval cases index the dataset's documents into an isolated in-memory backend, run the configured
-semantic/hybrid/rerank path, and report macro Recall@K, Mean Reciprocal Rank, Hit Rate, and
-case-level ranked document IDs. Agent cases execute the real `AgentRuntime` with the deterministic
-provider, real Knowledge Search, and the existing fixed tools; they check:
-
-- completed Run status and expected/forbidden tool routing;
-- source count and required source types;
-- presence of numbered citations and optional required answer terms;
-- LLM/tool call and latency ceilings;
-- aggregate pass, completion, tool-recall, and citation rates.
-
-The dataset also defines regression thresholds, so the JSON file can be reviewed and versioned with
-code changes. This first slice intentionally does not use an LLM-as-a-judge, live network services,
-or a production embedding model. Citation evaluation checks traceability presence, not factual
-faithfulness; human or model-based answer-quality scoring can be added later without changing the
-current dataset/report boundary.
-
-## Test
+## 测试与评估
 
 ```bash
 pytest
 ruff check .
-python -m app.evaluation --dataset evals/demo.json
+python -m app.evaluation --dataset evals/demo.json --output output/evaluation/demo-report.json
 ```
 
-## Safety and current limitations
+评估会运行真实 Agent Runtime 与知识检索链路，输出 JSON 报告，并在阈值未达标时返回退出码 `1`。它覆盖工具路由、引用、Recall@K、MRR、Hit Rate、调用量与延迟，不等同于生产答案质量评测。
 
-- Knowledge filters are generated server-side from an `AccessContext`, never from LLM tool arguments.
-- Access headers are disabled by default and are only a trusted-gateway integration seam, not authentication.
-- Ingestion requires a separate admin token and is disabled when the token is absent.
-- The deterministic local embedding supports offline tests but is not a substitute for a production embedding model.
-- Qdrant should use API-key/TLS controls and private networking outside local development.
-- SQL remains stubbed by default; the PostgreSQL backend requires explicit configuration, AST validation, a read-only transaction, timeout, schema allowlist, row cap, and non-sensitive audit metadata.
-- Python is stubbed by default. The optional isolated mode supports only bounded expressions, not arbitrary Python packages or scripts; OS-level resource caps remain a deployment hardening follow-up.
-- HTTP and browser tools are stubbed by default. The opt-in safe HTTP backend makes only allowlisted,
-  public-address, size-bounded requests; browser automation remains a stub.
-- Tool execution has a server-side `TOOL_MAX_PERMISSION` ceiling (`high` by default); calls above it are rejected and retained in the run trace. High-risk browser behavior still has no approval workflow.
-- Run token/cost budgets are enforced between provider responses; they are not billing guarantees, and configured cost rates must be kept current by the operator.
-- The built-in evaluation runner is an offline structural regression suite; it does not claim production retrieval quality or semantic answer correctness.
-- Run plans are dynamic tool-level plans, not a complete up-front decomposition guarantee; later Agent decisions may append steps before synthesis.
-- The OpenAI API key is read only from configuration and is never included in API responses, traces, or logs.
-- State is process-local and disappears on restart.
-- Authentication, tenant provisioning, durable audit logs, and production rate limiting are not implemented.
+## 安全边界
 
-## Replacement path
+- 默认配置不访问外部网络、数据库或浏览器。
+- 知识访问过滤由服务端 `AccessContext` 生成；身份头仅应在可信网关后启用。
+- HTTP Fetch 与 Browser 使用域名白名单，并拒绝 URL 凭据、IP 字面量和非公网地址。
+- SQL 只允许单条只读查询，并配合 Schema 白名单、超时和行数限制。
+- 隔离 Python 仅执行 AST 白名单约束的表达式，不是通用代码沙箱。
+- 项目尚未内置完整认证、租户目录、生产限流与持久化审计，公开部署前需在外围补齐。
 
-Each real integration should implement the existing `BaseTool` contract and be registered without changing the agent runtime or API event protocol. Recommended order:
+更多内容见[安全设计](docs/安全设计.md)。
 
-1. Real LLM provider and native tool calling.
-2. Production embedding, payload indexes, corpus-scale reranking, and retrieval evaluation.
-3. Extend the bounded URL importer with OCR and office document parsers.
-4. Schema retrieval, SQL AST validation, read-only PostgreSQL, timeout, and row limit.
-5. Isolated Python worker and Playwright browser worker.
-6. MCP discovery/invocation and permissions.
-7. PostgreSQL/Redis persistence, auth, budget controls, and evaluation.
+## 文档
+
+- [项目总览](docs/项目总览.md)
+- [架构详解](docs/架构详解.md)
+- [工具系统](docs/工具系统.md)
+- [API 接口](docs/API接口.md)
+- [安全设计](docs/安全设计.md)
+- [部署配置](docs/部署配置.md)
+
+## 参与贡献
+
+欢迎提交 Issue 与 Pull Request。请保持默认离线模式可运行，为行为变更补充测试，并在提交前运行 `pytest` 和 `ruff check .`。请勿提交 `.env`、API Key、数据库凭据、客户数据或内部文档。
+
+## 开源许可
+
+本项目基于 [MIT License](LICENSE) 开源。你可以自由使用、复制、修改、合并、发布和分发本项目，但须保留原始版权与许可声明。

@@ -5,8 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "enterprise-research-agent"
 version = "0.1.0"
-description = "A traceable enterprise research agent skeleton with deterministic stub tools."
+description = "A traceable, extensible enterprise research agent with offline defaults."
 readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
