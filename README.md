@@ -201,7 +201,13 @@ Read the [security design](docs/安全设计.md) for the complete threat model a
 
 ## Contributing
 
-Issues and pull requests are welcome. Keep the default offline mode operational, add tests for behavior changes, and run `pytest` and `ruff check .` before submitting. Never commit `.env` files, API keys, database credentials, customer data, or internal documents.
+The project launched on **August 27, 2026** and has already reached **82 clones** from **50 unique cloners** in 14 days *(data as of September 3, 2026)*.
+
+![Clone stats in last 14 days](docs/assets/clones-stats.png)
+
+Issues, pull requests, and discussions are all welcome — keep the default offline mode operational, add tests for behavior changes, and run `pytest` and `ruff check .` before submitting. Never commit `.env` files, API keys, database credentials, customer data, or internal documents.
+
+If you find this project useful, a ⭐ Star is greatly appreciated!
 
 ## License
 
