@@ -71,6 +71,7 @@ class SqlStubTool(FixedResultTool):
 def build_tool_registry(
     timeout_seconds: float,
     knowledge_tool: BaseTool | None = None,
+    knowledge_base_tool: BaseTool | None = None,
     web_search_tool: BaseTool | None = None,
     http_fetch_tool: BaseTool | None = None,
     schema_search_tool: BaseTool | None = None,
@@ -223,6 +224,8 @@ def build_tool_registry(
             permission=ToolPermission.LOW,
         ),
     ]
+    if knowledge_base_tool is not None:
+        tools.insert(0, knowledge_base_tool)
     for tool in tools:
         registry.register(tool)
     return registry

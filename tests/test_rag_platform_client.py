@@ -48,7 +48,7 @@ def _source_item(**overrides: object) -> dict:
         "document_id": "doc_abc123",
         "chunk_id": "chk_def456",
         "title": "Test Doc",
-        "content_snippet": "Hello world content.",
+        "content": "Hello world content.",
         "source_url": None,
         "knowledge_base_id": "kb-1",
         "tenant_id": "tenant-a",
@@ -58,6 +58,45 @@ def _source_item(**overrides: object) -> dict:
     }
     defaults.update(overrides)
     return defaults
+
+
+# ── knowledge-base discovery ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_list_knowledge_bases_maps_versioned_api_response():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/knowledge-bases"
+        assert request.headers["authorization"] == "Bearer secret"
+        return httpx.Response(
+            200,
+            json={
+                "knowledge_bases": [
+                    {
+                        "id": "123456",
+                        "name": "Employee Benefits Policy",
+                        "source": "yuque",
+                        "document_count": 3417,
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(
+            base_url="http://rag.test", api_key="secret", http_client=client
+        )
+        knowledge_bases = await rag.list_knowledge_bases()
+
+    assert knowledge_bases == [
+        {
+            "id": "123456",
+            "name": "Employee Benefits Policy",
+            "source": "yuque",
+            "document_count": 3417,
+        }
+    ]
 
 
 # ── upsert ──────────────────────────────────────────────────────────────
@@ -108,6 +147,147 @@ async def test_upsert_empty_chunks_is_noop():
         await rag.upsert([])
 
 
+@pytest.mark.asyncio
+async def test_upsert_preserves_public_access_without_principal_allowlist():
+    captured: dict = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(202, json={"job_id": "job_1", "status": "PENDING"})
+
+    chunk = _chunk(allowed_principal_ids=frozenset(), public=True)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(base_url="http://rag.test", api_key="k", http_client=client)
+        await rag.upsert([chunk])
+
+    assert captured["body"]["access_control"] == {
+        "allowed_principal_ids": [],
+        "is_public": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_upsert_reconstructs_overlapping_chunks_without_duplicate_text():
+    captured: dict = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            202,
+            json={
+                "job_id": "job_1",
+                "status": "PENDING",
+                "document_id": "doc_1",
+                "knowledge_base_id": "kb-1",
+                "tenant_id": "tenant-a",
+                "created_at": "2026-09-07T00:00:00Z",
+                "updated_at": "2026-09-07T00:00:00Z",
+                "error": None,
+            },
+        )
+
+    chunks = [
+        _chunk(content="abcdef", char_start=0, char_end=6),
+        _chunk(chunk_id="c2", content="defghi", char_start=3, char_end=9),
+    ]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(base_url="http://rag.test", api_key="k", http_client=client)
+        await rag.upsert(chunks)
+
+    assert captured["body"]["content"] == "abcdefghi"
+
+
+# ── lifecycle ─────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_delete_document_sends_idempotency_header():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "DELETE"
+        assert request.url.path == "/api/v1/knowledge-bases/kb-1/documents/doc_1"
+        assert request.url.query == b""
+        assert request.headers["idempotency-key"] == "delete-key-123"
+        return httpx.Response(
+            200,
+            json={
+                "document_id": "doc_1",
+                "knowledge_base_id": "kb-1",
+                "tenant_id": "tenant-a",
+                "deleted": True,
+                "deleted_at": "2026-09-07T00:00:00Z",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(base_url="http://rag.test", api_key="k", http_client=client)
+        result = await rag.delete_document(
+            "kb-1", "doc_1", idempotency_key="delete-key-123"
+        )
+
+    assert result["deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_get_ingestion_job_uses_versioned_status_endpoint():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/api/v1/ingestion-jobs/job_1"
+        return httpx.Response(
+            200,
+            json={
+                "job_id": "job_1",
+                "status": "READY",
+                "document_id": "doc_1",
+                "knowledge_base_id": "kb-1",
+                "tenant_id": "tenant-a",
+                "created_at": "2026-09-07T00:00:00Z",
+                "updated_at": "2026-09-07T00:00:01Z",
+                "error": None,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(base_url="http://rag.test", api_key="k", http_client=client)
+        result = await rag.get_ingestion_job("job_1")
+
+    assert result["status"] == "READY"
+
+
+@pytest.mark.asyncio
+async def test_update_document_sends_idempotency_key_in_json_body():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "PUT"
+        assert request.url.path == "/api/v1/knowledge-bases/kb-1/documents/doc_1"
+        assert json.loads(request.content) == {
+            "title": "Updated",
+            "idempotency_key": "update-key-123",
+        }
+        return httpx.Response(
+            202,
+            json={
+                "job_id": "job_2",
+                "status": "PENDING",
+                "document_id": "doc_1",
+                "knowledge_base_id": "kb-1",
+                "tenant_id": "tenant-a",
+                "created_at": "2026-09-07T00:00:00Z",
+                "updated_at": "2026-09-07T00:00:00Z",
+                "error": None,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(base_url="http://rag.test", api_key="k", http_client=client)
+        result = await rag.update_document(
+            "kb-1",
+            "doc_1",
+            updates={"title": "Updated"},
+            idempotency_key="update-key-123",
+        )
+
+    assert result["job_id"] == "job_2"
+
+
 # ── search_hybrid ───────────────────────────────────────────────────────
 
 
@@ -117,6 +297,7 @@ async def test_search_hybrid_returns_matches():
         body = json.loads(request.content)
         assert body["query"] == "hello"
         assert body["top_k"] == 5
+        assert "score_threshold" not in body
         return httpx.Response(200, json=_search_response([_source_item()]))
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
@@ -138,6 +319,7 @@ async def test_search_hybrid_returns_matches():
     assert m.score == 0.95
     assert m.char_start == 0
     assert m.char_end == 18
+    assert m.content == "Hello world content."
 
 
 @pytest.mark.asyncio
@@ -163,6 +345,34 @@ async def test_search_hybrid_with_metadata_filters():
 
     filters = captured["body"]["filters"]
     assert filters == [{"key": "category", "equals": "policy"}]
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_sends_explicitly_configured_score_threshold():
+    captured: dict = {}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_search_response([]))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(
+            base_url="http://rag.test",
+            api_key="k",
+            score_threshold=0.6,
+            http_client=client,
+        )
+        await rag.search_hybrid(
+            query="employee benefits policy",
+            vector=[0.1] * 64,
+            tenant_id="tenant-a",
+            principal_ids=set(),
+            knowledge_base_id="123456",
+            top_k=3,
+            rrf_k=60,
+        )
+
+    assert captured["body"]["score_threshold"] == 0.6
 
 
 @pytest.mark.asyncio
@@ -246,6 +456,32 @@ async def test_unauthorized_raises():
 
 
 @pytest.mark.asyncio
+async def test_platform_error_preserves_stable_error_code_without_credentials():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "code": "access_denied",
+                "message": "Knowledge base access denied",
+                "request_id": "req-1",
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        rag = RagPlatformClient(
+            base_url="http://rag.test", api_key="top-secret", http_client=client
+        )
+        with pytest.raises(KnowledgeBackendError) as exc_info:
+            await rag.list_knowledge_bases()
+
+    message = str(exc_info.value)
+    assert "403" in message
+    assert "access_denied" in message
+    assert "Knowledge base access denied" in message
+    assert "top-secret" not in message
+
+
+@pytest.mark.asyncio
 async def test_supports_hybrid_search():
     rag = RagPlatformClient(base_url="http://rag.test")
     assert rag.supports_hybrid_search is True
@@ -260,9 +496,9 @@ def test_parse_source_item_minimal():
         "chunk_id": "chk_1",
         "knowledge_base_id": "kb",
         "title": "T",
-        "content_snippet": "C",
+        "content": "C",
         "score": 0.5,
-        "location": {},
+        "location": None,
     }
     match = RagPlatformClient._parse_source_item(item)
     assert match.document_id == "doc_1"

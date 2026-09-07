@@ -9,10 +9,9 @@ upsert 走异步导入接口。
 
 from __future__ import annotations
 
+import json
 import logging
-import time
 from typing import Any
-from uuid import uuid4
 
 import httpx
 
@@ -36,12 +35,16 @@ class RagPlatformClient(KnowledgeBackend):
         api_key: str | None = None,
         timeout: float = 30.0,
         max_retries: int = 2,
+        score_threshold: float | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        if score_threshold is not None and not 0 <= score_threshold <= 1:
+            raise ValueError("score_threshold must be between 0 and 1")
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._timeout = timeout
         self._max_retries = max_retries
+        self._score_threshold = score_threshold
         self._client = http_client or httpx.AsyncClient(timeout=timeout)
         self._owns_client = http_client is None
 
@@ -57,6 +60,44 @@ class RagPlatformClient(KnowledgeBackend):
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
+    # ── knowledge bases ────────────────────────────────────────────────
+
+    async def list_knowledge_bases(self) -> list[dict[str, Any]]:
+        """列出当前 Bearer 凭证获授权的知识库。"""
+        body = await self._request("GET", "/api/v1/knowledge-bases")
+        items = body.get("knowledge_bases")
+        if not isinstance(items, list):
+            raise KnowledgeBackendError(
+                "rag-api knowledge-base response must contain a knowledge_bases list"
+            )
+
+        knowledge_bases: list[dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise KnowledgeBackendError("rag-api knowledge-base item must be an object")
+            knowledge_base_id = item.get("id")
+            name = item.get("name")
+            source = item.get("source")
+            document_count = item.get("document_count")
+            if (
+                not isinstance(knowledge_base_id, str)
+                or not isinstance(name, str)
+                or not isinstance(source, str)
+                or not isinstance(document_count, int)
+                or isinstance(document_count, bool)
+                or document_count < 0
+            ):
+                raise KnowledgeBackendError("rag-api knowledge-base item has invalid fields")
+            knowledge_bases.append(
+                {
+                    "id": knowledge_base_id,
+                    "name": name,
+                    "source": source,
+                    "document_count": document_count,
+                }
+            )
+        return knowledge_bases
+
     # ── upsert ──────────────────────────────────────────────────────────
 
     async def upsert(self, chunks: list[KnowledgeChunk]) -> None:
@@ -69,9 +110,7 @@ class RagPlatformClient(KnowledgeBackend):
             return
 
         first = chunks[0]
-        full_content = first.content
-        for chunk in chunks[1:]:
-            full_content += "\n" + chunk.content
+        full_content = self._reconstruct_content(chunks)
 
         body: dict[str, Any] = {
             "external_document_id": first.document_id,
@@ -82,7 +121,7 @@ class RagPlatformClient(KnowledgeBackend):
             "metadata": dict(first.metadata) if first.metadata else None,
         }
 
-        if first.allowed_principal_ids:
+        if first.allowed_principal_ids or first.public:
             body["access_control"] = {
                 "allowed_principal_ids": sorted(first.allowed_principal_ids),
                 "is_public": first.public,
@@ -150,6 +189,8 @@ class RagPlatformClient(KnowledgeBackend):
             "top_k": top_k,
             "include_content": True,
         }
+        if self._score_threshold is not None:
+            body["score_threshold"] = self._score_threshold
         if filters:
             body["filters"] = filters
 
@@ -184,6 +225,37 @@ class RagPlatformClient(KnowledgeBackend):
                 return None
             raise
 
+    async def get_ingestion_job(self, job_id: str) -> dict[str, Any] | None:
+        """查询异步导入或更新任务状态。"""
+        try:
+            return await self._request("GET", f"/api/v1/ingestion-jobs/{job_id}")
+        except KnowledgeBackendError as exc:
+            if "404" in str(exc):
+                return None
+            raise
+
+    async def update_document(
+        self,
+        knowledge_base_id: str,
+        document_id: str,
+        *,
+        updates: dict[str, Any],
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """异步覆盖更新 API 管理的文档。"""
+        body = dict(updates)
+        canonical_updates = json.dumps(
+            body, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+        body["idempotency_key"] = idempotency_key or self._make_idempotency_key(
+            document_id, canonical_updates
+        )
+        return await self._request(
+            "PUT",
+            f"/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}",
+            json=body,
+        )
+
     async def delete_document(
         self,
         knowledge_base_id: str,
@@ -195,7 +267,7 @@ class RagPlatformClient(KnowledgeBackend):
         return await self._request(
             "DELETE",
             f"/api/v1/knowledge-bases/{knowledge_base_id}/documents/{document_id}",
-            params={"idempotency_key": key},
+            headers={"Idempotency-Key": key},
         )
 
     async def aclose(self) -> None:
@@ -209,35 +281,44 @@ class RagPlatformClient(KnowledgeBackend):
     ) -> dict[str, Any]:
         url = f"{self._base_url}{path}"
         last_exc: Exception | None = None
+        request_headers = {**self._headers, **kwargs.pop("headers", {})}
 
         for attempt in range(self._max_retries + 1):
             try:
                 response = await self._client.request(
-                    method, url, headers=self._headers, **kwargs
+                    method, url, headers=request_headers, **kwargs
                 )
-                if response.status_code == 404:
-                    raise KnowledgeBackendError(f"404 Not Found: {path}")
-                if response.status_code == 401:
-                    raise KnowledgeBackendError("401 Unauthorized: check RAG_PLATFORM_API_KEY")
-                response.raise_for_status()
+                if response.status_code >= 500 and attempt < self._max_retries:
+                    logger.warning(
+                        "rag-api 5xx (attempt %d/%d): HTTP %d",
+                        attempt + 1,
+                        self._max_retries + 1,
+                        response.status_code,
+                    )
+                    await self._sleep(0.5 * (attempt + 1))
+                    continue
+                if response.is_error:
+                    raise KnowledgeBackendError(self._format_http_error(response))
                 body = response.json()
                 if not isinstance(body, dict):
                     raise KnowledgeBackendError("Response is not a JSON object")
                 return body
             except httpx.TimeoutException as exc:
                 last_exc = exc
-                logger.warning("rag-api timeout (attempt %d/%d): %s", attempt + 1, self._max_retries + 1, exc)
-            except httpx.HTTPStatusError as exc:
-                last_exc = exc
-                status = exc.response.status_code
-                if status >= 500 and attempt < self._max_retries:
-                    logger.warning("rag-api 5xx (attempt %d/%d): %s", attempt + 1, self._max_retries + 1, exc)
-                    await self._sleep(0.5 * (attempt + 1))
-                    continue
-                raise KnowledgeBackendError(f"rag-api HTTP {status}: {exc}") from exc
+                logger.warning(
+                    "rag-api timeout (attempt %d/%d): %s",
+                    attempt + 1,
+                    self._max_retries + 1,
+                    exc,
+                )
             except httpx.HTTPError as exc:
                 last_exc = exc
-                logger.warning("rag-api error (attempt %d/%d): %s", attempt + 1, self._max_retries + 1, exc)
+                logger.warning(
+                    "rag-api error (attempt %d/%d): %s",
+                    attempt + 1,
+                    self._max_retries + 1,
+                    exc,
+                )
             except KnowledgeBackendError:
                 raise
             except Exception as exc:
@@ -245,7 +326,30 @@ class RagPlatformClient(KnowledgeBackend):
                 logger.exception("rag-api unexpected error")
                 raise KnowledgeBackendError(f"rag-api unexpected: {exc}") from exc
 
-        raise KnowledgeBackendError(f"rag-api request failed after {self._max_retries + 1} attempts: {last_exc}")
+        raise KnowledgeBackendError(
+            f"rag-api request failed after {self._max_retries + 1} attempts: {last_exc}"
+        )
+
+    @staticmethod
+    def _format_http_error(response: httpx.Response) -> str:
+        code = "unknown"
+        message = response.reason_phrase or "Request failed"
+        request_id = None
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            if isinstance(payload.get("code"), str):
+                code = payload["code"]
+            elif isinstance(payload.get("error_code"), str):
+                code = payload["error_code"]
+            if isinstance(payload.get("message"), str):
+                message = payload["message"]
+            if isinstance(payload.get("request_id"), str):
+                request_id = payload["request_id"]
+        suffix = f" (request_id={request_id})" if request_id else ""
+        return f"rag-api HTTP {response.status_code} {code}: {message}{suffix}"
 
     @staticmethod
     async def _sleep(seconds: float) -> None:
@@ -260,7 +364,7 @@ class RagPlatformClient(KnowledgeBackend):
             chunk_id=str(item["chunk_id"]),
             knowledge_base_id=str(item["knowledge_base_id"]),
             title=str(item.get("title", "")),
-            content=str(item.get("content_snippet", "") or ""),
+            content=str(item.get("content", "") or ""),
             char_start=int(location.get("char_start") or 0),
             char_end=int(location.get("char_end") or 0),
             score=float(item.get("score", 0.0)),
@@ -270,5 +374,17 @@ class RagPlatformClient(KnowledgeBackend):
     @staticmethod
     def _make_idempotency_key(document_id: str, content: str) -> str:
         import hashlib
-        digest = hashlib.sha256(f"{document_id}:{len(content)}".encode()).hexdigest()[:16]
+        digest = hashlib.sha256(f"{document_id}:{content}".encode()).hexdigest()[:16]
         return f"agent_{digest}"
+
+    @staticmethod
+    def _reconstruct_content(chunks: list[KnowledgeChunk]) -> str:
+        ordered = sorted(chunks, key=lambda chunk: (chunk.char_start, chunk.char_end))
+        parts: list[str] = []
+        cursor = 0
+        for chunk in ordered:
+            overlap = max(0, cursor - chunk.char_start)
+            if overlap < len(chunk.content):
+                parts.append(chunk.content[overlap:])
+            cursor = max(cursor, chunk.char_end)
+        return "".join(parts)

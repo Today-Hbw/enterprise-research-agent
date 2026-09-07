@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     rag_platform_api_key: SecretStr | None = None
     rag_platform_timeout_seconds: float = Field(default=30, gt=0, le=120)
     rag_platform_max_retries: int = Field(default=2, ge=0, le=5)
+    rag_platform_score_threshold: float | None = Field(default=None, ge=0, le=1)
     knowledge_default_tenant: str = Field(default="demo", min_length=1, max_length=128)
     knowledge_default_principal: str = Field(default="demo-user", min_length=1, max_length=128)
     knowledge_admin_token: SecretStr | None = None
@@ -97,6 +98,25 @@ class Settings(BaseSettings):
             raise ValueError("LLM input and output token cost rates must be configured together")
         if self.run_cost_budget_usd is not None and not has_input_rate and not has_output_rate:
             raise ValueError("RUN_COST_BUDGET_USD requires configured LLM token cost rates")
+        return self
+
+    @model_validator(mode="after")
+    def validate_rag_platform_configuration(self) -> Self:
+        if self.knowledge_backend != "rag-platform":
+            return self
+        api_key = (
+            self.rag_platform_api_key.get_secret_value().strip()
+            if self.rag_platform_api_key
+            else ""
+        )
+        if not api_key:
+            raise ValueError(
+                "RAG_PLATFORM_API_KEY is required when KNOWLEDGE_BACKEND=rag-platform"
+            )
+        if self.knowledge_ranking != "hybrid":
+            raise ValueError(
+                "KNOWLEDGE_RANKING=hybrid is required when KNOWLEDGE_BACKEND=rag-platform"
+            )
         return self
 
 

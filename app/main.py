@@ -42,7 +42,7 @@ from app.postgres_store import PostgresStore
 from app.rag_platform_client import RagPlatformClient
 from app.store import store as memory_store
 from app.tools.browser import PlaywrightBrowserTool
-from app.tools.knowledge import KnowledgeSearchTool
+from app.tools.knowledge import KnowledgeBaseListTool, KnowledgeSearchTool
 from app.tools.mcp import McpInvokeTool, load_mcp_catalog
 from app.tools.python_worker import IsolatedPythonTool
 from app.tools.sql import ExecuteSqlTool, PostgresBackend, SchemaSearchTool
@@ -72,9 +72,14 @@ if settings.knowledge_backend == "qdrant":
 elif settings.knowledge_backend == "rag-platform":
     knowledge_backend = RagPlatformClient(
         base_url=settings.rag_platform_base_url,
-        api_key=(settings.rag_platform_api_key.get_secret_value() if settings.rag_platform_api_key else None),
+        api_key=(
+            settings.rag_platform_api_key.get_secret_value()
+            if settings.rag_platform_api_key
+            else None
+        ),
         timeout=settings.rag_platform_timeout_seconds,
         max_retries=settings.rag_platform_max_retries,
+        score_threshold=settings.rag_platform_score_threshold,
     )
 else:
     knowledge_backend = InMemoryKnowledgeBackend()
@@ -154,10 +159,19 @@ if settings.http_fetch_backend == "safe":
 registry = build_tool_registry(
     settings.tool_timeout_seconds,
     max_permission=settings.tool_max_permission,
+    knowledge_base_tool=(
+        KnowledgeBaseListTool(
+            client=knowledge_backend,
+            timeout_seconds=settings.tool_timeout_seconds,
+        )
+        if isinstance(knowledge_backend, RagPlatformClient)
+        else None
+    ),
     knowledge_tool=KnowledgeSearchTool(
         service=knowledge_service,
         timeout_seconds=settings.tool_timeout_seconds,
         allowed_metadata_keys=set(settings.knowledge_metadata_filter_keys.split(",")),
+        require_knowledge_base_id=isinstance(knowledge_backend, RagPlatformClient),
     ),
     web_search_tool=web_search_tool,
     http_fetch_tool=http_fetch_tool,
@@ -273,6 +287,17 @@ def require_knowledge_admin(x_knowledge_admin_token: str | None) -> None:
         raise HTTPException(status_code=403, detail="Invalid knowledge admin token")
 
 
+def require_local_knowledge_ingestion() -> None:
+    if isinstance(knowledge_backend, RagPlatformClient):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Local knowledge ingestion is unavailable with rag-platform; "
+                "use the RAG Platform /api/v1 asynchronous document API directly"
+            ),
+        )
+
+
 @app.post(
     "/api/knowledge/documents",
     response_model=IndexedKnowledgeDocument,
@@ -284,6 +309,7 @@ async def create_knowledge_document(
     x_principal_ids: str | None = Header(default=None, alias="X-Principal-Ids"),
     x_knowledge_admin_token: str | None = Header(default=None, alias="X-Knowledge-Admin-Token"),
 ) -> IndexedKnowledgeDocument:
+    require_local_knowledge_ingestion()
     require_knowledge_admin(x_knowledge_admin_token)
     access_context = access_context_from_headers(x_tenant_id, x_principal_ids)
     if not document.public and not document.allowed_principal_ids:
@@ -306,6 +332,7 @@ async def import_knowledge_url(
     x_principal_ids: str | None = Header(default=None, alias="X-Principal-Ids"),
     x_knowledge_admin_token: str | None = Header(default=None, alias="X-Knowledge-Admin-Token"),
 ) -> ImportedKnowledgeDocument:
+    require_local_knowledge_ingestion()
     require_knowledge_admin(x_knowledge_admin_token)
     if safe_fetcher is None:
         raise HTTPException(status_code=503, detail="Safe HTTP import is disabled")

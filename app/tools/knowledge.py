@@ -1,6 +1,49 @@
+from typing import Protocol
+
 from app.knowledge import KnowledgeService
 from app.models import AccessContext, Source, SourceType, ToolCall, ToolResult
 from app.tools.base import BaseTool
+
+
+class KnowledgeBaseProvider(Protocol):
+    async def list_knowledge_bases(self) -> list[dict[str, object]]: ...
+
+
+class KnowledgeBaseListTool(BaseTool):
+    name = "knowledge_base_list"
+    description = (
+        "List the RAG Platform knowledge bases authorized for this deployment. "
+        "Use a returned id as knowledge_base_id when calling knowledge_search."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    is_stub = False
+
+    def __init__(
+        self,
+        *,
+        client: KnowledgeBaseProvider,
+        timeout_seconds: float,
+    ) -> None:
+        super().__init__(timeout_seconds)
+        self._client = client
+
+    async def execute(
+        self, call: ToolCall, access_context: AccessContext | None = None
+    ) -> ToolResult:
+        del access_context
+        knowledge_bases = await self._client.list_knowledge_bases()
+        count = len(knowledge_bases)
+        return ToolResult(
+            call_id=call.call_id,
+            tool_name=self.name,
+            success=True,
+            summary=f"Found {count} authorized knowledge base(s).",
+            data={"knowledge_bases": knowledge_bases},
+        )
 
 
 class KnowledgeSearchTool(BaseTool):
@@ -27,9 +70,18 @@ class KnowledgeSearchTool(BaseTool):
         service: KnowledgeService,
         timeout_seconds: float,
         allowed_metadata_keys: set[str] | None = None,
+        require_knowledge_base_id: bool = False,
     ) -> None:
         super().__init__(timeout_seconds)
         self._service = service
+        self.input_schema = {
+            **type(self).input_schema,
+            "required": (
+                ["query", "knowledge_base_id"]
+                if require_knowledge_base_id
+                else ["query"]
+            ),
+        }
         self._allowed_metadata_keys = {
             key.strip() for key in allowed_metadata_keys or set() if key.strip()
         }

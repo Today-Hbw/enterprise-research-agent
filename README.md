@@ -112,8 +112,9 @@ QDRANT_API_KEY=your_qdrant_api_key
 # RAG Platform requires hybrid retrieval and a knowledge_base_id
 # KNOWLEDGE_BACKEND=rag-platform
 # KNOWLEDGE_RANKING=hybrid
-# RAG_PLATFORM_BASE_URL=http://localhost:8001
+# RAG_PLATFORM_BASE_URL=http://rag-platform.example.com:8001
 # RAG_PLATFORM_API_KEY=your_api_key
+# RAG_PLATFORM_SCORE_THRESHOLD=0.6  # optional; unset means no threshold
 
 # Brave Search
 WEB_SEARCH_BACKEND=brave
@@ -131,6 +132,30 @@ BROWSER_ALLOWED_HOSTS=app.example.com,.approved.example
 ```
 
 Selecting a live LLM provider without its API key causes startup to fail instead of silently falling back to deterministic mode. The PostgreSQL role must independently have read-only access to the allowed schemas.
+
+### RAG Platform smoke test
+
+The integration uses the platform's `/api/v1` contract. Keep the Bearer Token in an
+environment variable; do not commit it. Omitting `RAG_PLATFORM_SCORE_THRESHOLD` means
+the search request has no score-threshold requirement.
+
+```bash
+curl http://rag-platform.example.com:8001/api/v1/health
+
+curl http://rag-platform.example.com:8001/api/v1/knowledge-bases \
+  -H "Authorization: Bearer $RAG_PLATFORM_API_KEY"
+
+curl -X POST http://rag-platform.example.com:8001/api/v1/knowledge-bases/123456/search \
+  -H "Authorization: Bearer $RAG_PLATFORM_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"employee benefits policy","top_k":3,"include_content":true}'
+```
+
+When enabled, the Agent receives a `knowledge_base_list` discovery tool and a
+`knowledge_search` tool that requires an explicit `knowledge_base_id`.
+Document ingestion and lifecycle management remain asynchronous platform operations;
+use the RAG Platform `/api/v1` endpoints directly instead of this application's local
+knowledge-ingestion endpoints.
 
 ### Controlled Knowledge Ingestion
 

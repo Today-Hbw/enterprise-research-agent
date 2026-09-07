@@ -90,3 +90,19 @@ def test_cost_budget_requires_rates_and_rejects_partial_pricing() -> None:
 
     with pytest.raises(ValidationError, match="must be configured together"):
         Settings(llm_input_cost_per_million_tokens=1)
+
+
+def test_rag_platform_requires_api_key_and_hybrid_ranking() -> None:
+    with pytest.raises(ValidationError, match="RAG_PLATFORM_API_KEY"):
+        Settings(
+            knowledge_backend="rag-platform",
+            knowledge_ranking="hybrid",
+            rag_platform_api_key=None,
+        )
+
+    with pytest.raises(ValidationError, match="KNOWLEDGE_RANKING=hybrid"):
+        Settings(
+            knowledge_backend="rag-platform",
+            knowledge_ranking="semantic",
+            rag_platform_api_key="secret",
+        )

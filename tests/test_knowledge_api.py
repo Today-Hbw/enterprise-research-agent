@@ -3,7 +3,9 @@ from uuid import uuid4
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+import app.main as main_module
 from app.main import app, settings
+from app.rag_platform_client import RagPlatformClient
 
 
 def test_admin_ingestion_to_authorized_chat_citation(monkeypatch) -> None:
@@ -74,3 +76,20 @@ def test_ingestion_rejects_missing_or_invalid_admin_token(monkeypatch) -> None:
 
     assert missing.status_code == 403
     assert invalid.status_code == 403
+
+
+def test_rag_platform_mode_rejects_misleading_synchronous_ingestion(monkeypatch) -> None:
+    monkeypatch.setattr(
+        main_module,
+        "knowledge_backend",
+        object.__new__(RagPlatformClient),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/knowledge/documents",
+            json={"title": "Policy", "content": "Policy content."},
+        )
+
+    assert response.status_code == 409
+    assert "/api/v1" in response.json()["detail"]
