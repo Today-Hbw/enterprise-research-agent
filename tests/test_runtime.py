@@ -243,3 +243,38 @@ async def test_cost_budget_uses_configured_rates_and_stops_the_run() -> None:
     assert run.metrics.estimated_cost == 0.00002
     assert run.metrics.budget_exhausted is True
     assert run.metrics.budget_reason == "Run cost budget exhausted: $0.00002000/$0.00001900"
+
+
+class CapturingProvider(LLMProvider):
+    name = "capturing-test-provider"
+
+    def __init__(self) -> None:
+        self.history = []
+
+    async def decide(self, **kwargs) -> AgentDecision:
+        self.history = kwargs["history"]
+        return AgentDecision(final_answer="ok", decision_summary="Captured history.")
+
+
+class DetachedMessageStore(InMemoryStore):
+    async def add_message(self, conversation_id, message) -> None:
+        async with self._lock:
+            conversation = self._conversations[conversation_id].model_copy(deep=True)
+            conversation.messages.append(message)
+            self._conversations[conversation_id] = conversation
+
+
+@pytest.mark.asyncio
+async def test_runtime_passes_new_user_message_when_store_returns_detached_objects() -> None:
+    provider = CapturingProvider()
+    runtime = AgentRuntime(
+        settings=Settings(max_steps=2, run_timeout_seconds=5, tool_timeout_seconds=1),
+        provider=provider,
+        registry=build_stub_registry(1),
+        store=DetachedMessageStore(),
+    )
+
+    events = [event async for event in runtime.stream(query="live query", conversation_id=None)]
+
+    assert events[-1].event == "run_completed"
+    assert [message.content for message in provider.history] == ["live query"]

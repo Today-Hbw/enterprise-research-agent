@@ -92,6 +92,7 @@ class AgentRuntime:
             access_context.principal_ids,
         )
         user_message = Message(role=MessageRole.USER, content=query)
+        history = [*conversation.messages, user_message]
         await self.store.add_message(conversation.conversation_id, user_message)
 
         run = RunRecord(
@@ -123,7 +124,7 @@ class AgentRuntime:
         try:
             async with asyncio.timeout(self.settings.run_timeout_seconds):
                 async for emitted in self._execute(
-                    run, conversation.messages, access_context, event
+                    run, history, access_context, event
                 ):
                     yield emitted
         except TimeoutError:
