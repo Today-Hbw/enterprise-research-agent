@@ -51,8 +51,9 @@ async def test_complex_research_run_completes_with_trace_and_sources() -> None:
     assert events[-1].event == "run_completed"
     assert [event.sequence for event in events] == list(range(1, len(events) + 1))
     assert [event.event for event in events].count("plan_created") == 1
-    assert [event.event for event in events].count("plan_updated") == 2
+    assert [event.event for event in events].count("plan_updated") == 3
     plan_created = next(event for event in events if event.event == "plan_created")
+    assert all(step["tool_name"] is not None for step in plan_created.data["plan"])
     assert events.index(plan_created) < next(
         i for i, event in enumerate(events) if event.event == "tool_started"
     )
@@ -88,6 +89,14 @@ async def test_complex_research_run_completes_with_trace_and_sources() -> None:
     }
     assert len(run.sources) == 5
     assert "placeholder" in run.final_answer
+    synthesis_added = next(
+        event
+        for event in events
+        if event.event == "plan_updated"
+        and any(step["tool_name"] is None for step in event.data["plan"])
+    )
+    assistant_delta = next(event for event in events if event.event == "assistant_delta")
+    assert events.index(synthesis_added) < events.index(assistant_delta)
 
 
 @pytest.mark.asyncio
@@ -134,10 +143,7 @@ async def test_repeated_tool_call_fails_run_instead_of_looping() -> None:
     assert run is not None
     assert run.status == RunStatus.FAILED
     assert "Repeated tool call" in run.error
-    assert [step.status for step in run.plan] == [
-        PlanStepStatus.COMPLETED,
-        PlanStepStatus.FAILED,
-    ]
+    assert [step.status for step in run.plan] == [PlanStepStatus.COMPLETED]
 
 
 class TokenHungryProvider(LLMProvider):

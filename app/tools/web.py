@@ -16,6 +16,17 @@ from app.tools.base import BaseTool
 Resolver = Callable[[str, int], Awaitable[set[str]]]
 
 
+class BrowserRequiredError(ValueError):
+    """Raised when a source rejects bounded HTTP but may allow browser rendering."""
+
+    def __init__(self, url: str, status_code: int) -> None:
+        super().__init__(
+            f"Source returned HTTP {status_code}; retry this URL with the approved browser tool."
+        )
+        self.url = url
+        self.status_code = status_code
+
+
 def _is_safe_citation_url(value: str) -> bool:
     parsed = urlsplit(value)
     return (
@@ -130,6 +141,15 @@ class SafeHttpFetcher:
 
     _REDIRECT_CODES = {301, 302, 303, 307, 308}
     _ALLOWED_CONTENT_TYPES = DocumentParser.SUPPORTED_CONTENT_TYPES
+    _DEFAULT_HEADERS = {
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Cache-Control": "no-cache",
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/128.0.0.0 Safari/537.36"
+        ),
+    }
 
     def __init__(
         self,
@@ -174,7 +194,10 @@ class SafeHttpFetcher:
                     "GET",
                     current_url,
                     follow_redirects=False,
-                    headers={"Accept": ",".join(sorted(self._ALLOWED_CONTENT_TYPES))},
+                    headers={
+                        **self._DEFAULT_HEADERS,
+                        "Accept": ",".join(sorted(self._ALLOWED_CONTENT_TYPES)),
+                    },
                 ) as response:
                     if response.status_code in self._REDIRECT_CODES:
                         location = response.headers.get("location")
@@ -209,6 +232,10 @@ class SafeHttpFetcher:
                         body=bytes(body),
                         content_disposition=response.headers.get("content-disposition"),
                     )
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 412:
+                    raise BrowserRequiredError(current_url, 412) from exc
+                raise ValueError(f"HTTP fetch request failed: {exc}") from exc
             except httpx.HTTPError as exc:
                 raise ValueError(f"HTTP fetch request failed: {exc}") from exc
         raise ValueError("HTTP fetch exceeded redirect limit")
@@ -339,6 +366,19 @@ class HttpFetchTool(BaseTool):
         url = str(call.arguments.get("url", "")).strip()
         try:
             page = await self._fetcher.fetch(url)
+        except BrowserRequiredError as exc:
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=self.name,
+                success=False,
+                summary="The source requires approved browser rendering.",
+                data={
+                    "fallback_tool": "browser",
+                    "url": exc.url,
+                    "status_code": exc.status_code,
+                },
+                error=str(exc),
+            )
         except ValueError as exc:
             return ToolResult(
                 call_id=call.call_id,

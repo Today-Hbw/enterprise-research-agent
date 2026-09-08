@@ -61,6 +61,8 @@ async def test_safe_fetch_parses_html_and_produces_anchored_source() -> None:
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == "https://public.example/report"
+        assert request.headers["user-agent"].startswith("Mozilla/5.0")
+        assert request.headers["accept-language"].startswith("zh-CN")
         return httpx.Response(
             200,
             headers={"content-type": "text/html; charset=utf-8"},
@@ -171,6 +173,33 @@ async def test_safe_fetch_rejects_private_literal_and_enforces_response_limit() 
         await fetcher.fetch("https://127.0.0.1/metadata")
     with pytest.raises(ValueError, match="response body exceeds"):
         await fetcher.fetch("https://public.example/large")
+    await fetcher.aclose()
+
+
+@pytest.mark.asyncio
+async def test_http_fetch_412_returns_browser_fallback_signal() -> None:
+    async def resolver(host: str, port: int) -> set[str]:
+        return {"93.184.216.34"}
+
+    client = _mock_client(
+        httpx.MockTransport(lambda request: httpx.Response(412, request=request))
+    )
+    fetcher = SafeHttpFetcher(
+        allowed_hosts={"public.example"}, resolver=resolver, http_client=client
+    )
+    tool = HttpFetchTool(fetcher=fetcher, timeout_seconds=1)
+
+    result = await tool.execute(
+        ToolCall(name="http_fetch", arguments={"url": "https://public.example/protected"})
+    )
+
+    assert result.success is False
+    assert result.data == {
+        "fallback_tool": "browser",
+        "url": "https://public.example/protected",
+        "status_code": 412,
+    }
+    assert "browser tool" in (result.error or "")
     await fetcher.aclose()
 
 

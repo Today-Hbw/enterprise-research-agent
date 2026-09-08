@@ -24,7 +24,7 @@
       >
         Inspector <span aria-hidden="true">↗</span>
       </button>
-      <span class="demo-badge">DEMO · STUB TOOLS</span>
+      <span id="demo-badge" class="demo-badge" hidden>DEMO · STUB TOOLS</span>
     </header>
 
     <main class="workspace">
@@ -37,14 +37,14 @@
           <button id="new-chat" class="icon-button" aria-label="New conversation">＋</button>
         </div>
         <div id="conversation-list" class="conversation-list"></div>
-        <div class="sidebar-footer">
+        <div id="demo-sidebar-status" class="sidebar-footer" hidden>
           <div class="status-dot"></div>
           <div><strong>Local demo</strong><span>In-memory state</span></div>
         </div>
       </aside>
 
       <section class="panel chat-panel">
-        <div class="notice">
+        <div id="demo-notice" class="notice" hidden>
           <strong>Deterministic demo mode</strong>
           <span>All external tools return fixed placeholder content. No network, database, or code execution occurs.</span>
         </div>

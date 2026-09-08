@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -359,6 +360,7 @@ class RagPlatformClient(KnowledgeBackend):
     @staticmethod
     def _parse_source_item(item: dict[str, Any]) -> KnowledgeMatch:
         location = item.get("location") or {}
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         return KnowledgeMatch(
             document_id=str(item["document_id"]),
             chunk_id=str(item["chunk_id"]),
@@ -368,8 +370,29 @@ class RagPlatformClient(KnowledgeBackend):
             char_start=int(location.get("char_start") or 0),
             char_end=int(location.get("char_end") or 0),
             score=float(item.get("score", 0.0)),
-            source_url=str(item["source_url"]) if item.get("source_url") else None,
+            source_url=RagPlatformClient._source_url(item, metadata),
         )
+
+    @staticmethod
+    def _source_url(item: dict[str, Any], metadata: dict[str, Any]) -> str | None:
+        """Prefer document-level links over a knowledge-base landing page."""
+        candidates = (
+            item.get("document_url"),
+            item.get("url"),
+            metadata.get("document_url"),
+            metadata.get("url"),
+            metadata.get("source_url"),
+            metadata.get("yuque_url"),
+            item.get("source_url"),
+        )
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            candidate = candidate.strip()
+            parsed = urlsplit(candidate)
+            if parsed.scheme in {"http", "https"} and parsed.hostname:
+                return candidate
+        return None
 
     @staticmethod
     def _make_idempotency_key(document_id: str, content: str) -> str:

@@ -21,6 +21,9 @@ const elements = {
   inspectorToggle: document.querySelector("#inspector-toggle"),
   inspectorClose: document.querySelector("#inspector-close"),
   inspectorBackdrop: document.querySelector("#inspector-backdrop"),
+  demoBadge: document.querySelector("#demo-badge"),
+  demoSidebarStatus: document.querySelector("#demo-sidebar-status"),
+  demoNotice: document.querySelector("#demo-notice"),
 };
 
 const inspectorDrawerScreen = window.matchMedia("(max-width: 1180px)");
@@ -79,6 +82,21 @@ function setInspectorOpen(open, returnFocus = false) {
 
 function syncInspectorMode() {
   setInspectorOpen(false);
+}
+
+function setDemoMode(isDemo) {
+  elements.demoBadge.hidden = !isDemo;
+  elements.demoSidebarStatus.hidden = !isDemo;
+  elements.demoNotice.hidden = !isDemo;
+}
+
+async function loadRuntimeMode() {
+  try {
+    const response = await fetch("/api/health");
+    if (response.ok) setDemoMode(Boolean((await response.json()).demo_mode));
+  } catch (_error) {
+    setDemoMode(false);
+  }
 }
 
 function addTrace(title, description, type = "decision", meta = "") {
@@ -240,6 +258,7 @@ function handleEvent(payload, assistantNode) {
   if (event === "run_started") {
     state.conversationId = data.conversation_id;
     elements.summary.textContent = `${payload.run_id}\n${data.model}\nRUNNING`;
+    setDemoMode(Boolean(data.is_demo));
     addTrace("Run started", "Runtime limits and tool registry loaded.", "decision", payload.run_id);
   } else if (event === "agent_decision") {
     addTrace(`Agent decision · step ${data.step}`, data.summary);
@@ -248,9 +267,10 @@ function handleEvent(payload, assistantNode) {
   } else if (event === "plan_step_updated") {
     updatePlanStep(data.step);
   } else if (event === "tool_started") {
-    addTrace(data.tool_name, "Executing deterministic placeholder tool…", "tool", data.call_id);
+    addTrace(data.tool_name, "Executing tool…", "tool", data.call_id);
   } else if (event === "tool_completed") {
-    addTrace(`${data.tool_name} · complete`, data.summary, "tool", `${data.duration_ms}ms · STUB`);
+    const toolMode = data.is_stub ? "STUB" : "LIVE";
+    addTrace(`${data.tool_name} · complete`, data.summary, "tool", `${data.duration_ms}ms · ${toolMode}`);
     addSources(data.sources);
   } else if (event === "assistant_delta") {
     assistantNode.classList.remove("thinking");
@@ -394,5 +414,6 @@ document.addEventListener("keydown", (event) => {
 inspectorDrawerScreen.addEventListener("change", syncInspectorMode);
 
 syncInspectorMode();
+loadRuntimeMode();
 loadConversations();
 loadDashboard();

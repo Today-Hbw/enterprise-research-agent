@@ -33,6 +33,8 @@ def test_frontend_serves_explicit_inspector_controls_and_local_markdown_renderer
     assert "font-size: 0.98rem" in styles
     assert "@media (prefers-reduced-motion: reduce)" in styles
     assert 'aria-label="Research question"' in html
+    assert 'id="demo-badge" class="demo-badge" hidden' in html
+    assert 'id="demo-notice" class="notice" hidden' in html
 
 
 def test_frontend_connects_markdown_to_stored_and_streamed_assistant_messages() -> None:
@@ -45,6 +47,8 @@ def test_frontend_connects_markdown_to_stored_and_streamed_assistant_messages() 
     assert 'event === "plan_created" || event === "plan_updated"' in script
     assert 'event === "plan_step_updated"' in script
     assert "renderPlan(run.plan)" in script
+    assert 'fetch("/api/health")' in script
+    assert 'data.is_stub ? "STUB" : "LIVE"' in script
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")

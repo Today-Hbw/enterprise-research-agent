@@ -289,3 +289,15 @@ async def test_knowledge_metadata_filter_is_server_allowlisted() -> None:
     assert filtered.data["metadata_filters"] == {"region": "apac"}
     assert rejected.success is False
     assert "not allowed" in rejected.summary
+
+
+def test_knowledge_tool_only_advertises_configured_metadata_filters() -> None:
+    without_filters = KnowledgeSearchTool(service=build_service(), timeout_seconds=1)
+    with_filters = KnowledgeSearchTool(
+        service=build_service(), timeout_seconds=1, allowed_metadata_keys={"region"}
+    )
+
+    assert "metadata_filters" not in without_filters.input_schema["properties"]
+    assert with_filters.input_schema["properties"]["metadata_filters"]["propertyNames"] == {
+        "enum": ["region"]
+    }

@@ -74,16 +74,26 @@ class KnowledgeSearchTool(BaseTool):
     ) -> None:
         super().__init__(timeout_seconds)
         self._service = service
+        self._allowed_metadata_keys = {
+            key.strip() for key in allowed_metadata_keys or set() if key.strip()
+        }
+        properties = dict(type(self).input_schema["properties"])
+        if self._allowed_metadata_keys:
+            properties["metadata_filters"] = {
+                "type": "object",
+                "propertyNames": {"enum": sorted(self._allowed_metadata_keys)},
+                "additionalProperties": {"type": "string"},
+            }
+        else:
+            properties.pop("metadata_filters", None)
         self.input_schema = {
             **type(self).input_schema,
+            "properties": properties,
             "required": (
                 ["query", "knowledge_base_id"]
                 if require_knowledge_base_id
                 else ["query"]
             ),
-        }
-        self._allowed_metadata_keys = {
-            key.strip() for key in allowed_metadata_keys or set() if key.strip()
         }
 
     async def execute(

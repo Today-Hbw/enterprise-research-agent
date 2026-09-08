@@ -506,3 +506,14 @@ def test_parse_source_item_minimal():
     assert match.char_start == 0
     assert match.char_end == 0
     assert match.source_url is None
+
+
+def test_parse_source_item_prefers_document_url_from_metadata():
+    item = _source_item(
+        source_url="https://www.yuque.com/hfyi1g/4161555",
+        metadata={"document_url": "https://www.yuque.com/hfyi1g/4161555/chengdu"},
+    )
+
+    match = RagPlatformClient._parse_source_item(item)
+
+    assert match.source_url == "https://www.yuque.com/hfyi1g/4161555/chengdu"

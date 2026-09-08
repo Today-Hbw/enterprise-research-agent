@@ -7,6 +7,7 @@ from typing import Any
 
 import psycopg
 from psycopg import sql
+from pydantic_core import to_jsonable_python
 from sqlglot import exp, parse
 
 from app.models import AccessContext, Source, SourceType, ToolCall, ToolPermission, ToolResult
@@ -228,7 +229,7 @@ class ExecuteSqlTool(BaseTool):
             summary=f"Query returned {len(rows)} row(s){' (truncated)' if truncated else ''}.",
             data={
                 "columns": columns,
-                "rows": rows,
+                "rows": to_jsonable_python(rows),
                 "truncated": truncated,
                 "max_rows": self.backend.max_rows,
             },

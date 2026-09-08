@@ -202,13 +202,13 @@ class AgentRuntime:
             )
 
             if decision.final_answer is not None:
-                plan_event = self._sync_plan(run, [])
-                if plan_event:
-                    await self.store.save_run(run)
-                    yield event_factory(
-                        plan_event, plan=[step.model_dump(mode="json") for step in run.plan]
-                    )
-                synthesis = self._synthesis_step(run)
+                synthesis = self._ensure_synthesis_step(run)
+                synthesis.status = PlanStepStatus.RUNNING
+                await self.store.save_run(run)
+                yield event_factory(
+                    "plan_updated", plan=[step.model_dump(mode="json") for step in run.plan]
+                )
+                yield event_factory("plan_step_updated", step=synthesis.model_dump(mode="json"))
                 synthesis.status = PlanStepStatus.COMPLETED
                 synthesis.error = None
                 await self.store.save_run(run)
@@ -296,15 +296,6 @@ class AgentRuntime:
 
     def _sync_plan(self, run: RunRecord, calls: list[ToolCall]) -> str | None:
         created = not run.plan
-        if created:
-            run.plan.append(
-                PlanStep(
-                    index=0,
-                    title="Synthesize the final answer",
-                    description="Combine validated evidence into a cited, traceable response.",
-                )
-            )
-        synthesis = self._synthesis_step(run)
         known_call_ids = {step.call_id for step in run.plan if step.call_id}
         additions = []
         for call in calls:
@@ -331,8 +322,7 @@ class AgentRuntime:
                 )
             )
         if additions:
-            synthesis_index = run.plan.index(synthesis)
-            run.plan[synthesis_index:synthesis_index] = additions
+            run.plan.extend(additions)
         for index, step in enumerate(run.plan):
             step.index = index
         if created:
@@ -340,8 +330,16 @@ class AgentRuntime:
         return "plan_updated" if additions else None
 
     @staticmethod
-    def _synthesis_step(run: RunRecord) -> PlanStep:
-        return next(step for step in run.plan if step.tool_name is None)
+    def _ensure_synthesis_step(run: RunRecord) -> PlanStep:
+        synthesis = next((step for step in run.plan if step.tool_name is None), None)
+        if synthesis is None:
+            synthesis = PlanStep(
+                index=len(run.plan),
+                title="Synthesize the final answer",
+                description="Combine validated evidence into a cited, traceable response.",
+            )
+            run.plan.append(synthesis)
+        return synthesis
 
     @staticmethod
     def _plan_step_for_call(run: RunRecord, call_id: str) -> PlanStep:
