@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ import httpx
 from app.document_parser import DocumentParser, DownloadedResource
 from app.models import AccessContext, Source, SourceType, ToolCall, ToolResult
 from app.tools.base import BaseTool
+
+logger = logging.getLogger(__name__)
 
 Resolver = Callable[[str, int], Awaitable[set[str]]]
 
@@ -69,6 +72,7 @@ class BraveSearchBackend:
             raise ValueError("Web search query must be 1 to 400 characters")
         if len(normalized_query.split()) > 50:
             raise ValueError("Web search query must contain at most 50 words")
+        logger.info("Brave web search: query_length=%d, top_k=%d", len(normalized_query), top_k)
         try:
             response = await self._client.get(
                 self._base_url,
@@ -81,6 +85,7 @@ class BraveSearchBackend:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
+            logger.error("Brave web search failed: %s", exc)
             raise ValueError(f"Web search request failed: {exc}") from exc
 
         payload = response.json()
@@ -175,8 +180,15 @@ class SafeHttpFetcher:
         self._parser = parser or DocumentParser()
 
     async def fetch(self, url: str) -> FetchedPage:
+        logger.info("HTTP fetch started")
         resource = await self.download(url)
         parsed = await asyncio.to_thread(self._parser.parse, resource)
+        logger.info(
+            "HTTP fetch completed: status=%d, content_type=%s, text_length=%d",
+            resource.status_code,
+            resource.content_type,
+            len(parsed.content),
+        )
         return FetchedPage(
             final_url=resource.final_url,
             status_code=resource.status_code,

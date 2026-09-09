@@ -1,6 +1,9 @@
 import asyncio
+import logging
 
 from app.models import Conversation, Message, RunRecord, RunStatus, utc_now
+
+logger = logging.getLogger(__name__)
 
 
 class InMemoryStore:
@@ -27,7 +30,11 @@ class InMemoryStore:
                     or conversation.tenant_id != tenant_id
                     or not conversation.principal_ids.intersection(effective_principals)
                 ):
+                    logger.warning(
+                        "Conversation not found: %s (tenant=%s)", conversation_id, tenant_id
+                    )
                     raise KeyError(f"Conversation not found: {conversation_id}")
+                logger.debug("Loaded existing conversation: %s", conversation_id)
                 return conversation
 
             title = first_query.strip().replace("\n", " ")[:60] or "New conversation"
@@ -37,6 +44,11 @@ class InMemoryStore:
                 principal_ids=effective_principals,
             )
             self._conversations[conversation.conversation_id] = conversation
+            logger.info(
+                "Created new conversation: id=%s, tenant=%s",
+                conversation.conversation_id,
+                tenant_id,
+            )
             return conversation
 
     async def add_message(self, conversation_id: str, message: Message) -> None:

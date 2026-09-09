@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import psycopg
 
 from app.models import Conversation, Message, RunRecord, RunStatus, utc_now
+
+logger = logging.getLogger(__name__)
 
 
 class PostgresStore:
@@ -14,6 +17,7 @@ class PostgresStore:
         self.dsn = dsn
 
     async def initialize(self) -> None:
+        logger.info("Initializing Postgres state store")
         async with await psycopg.AsyncConnection.connect(self.dsn) as connection:
             await connection.execute(
                 "CREATE TABLE IF NOT EXISTS agent_conversations (id text PRIMARY KEY, tenant_id text NOT NULL, principals text[] NOT NULL, updated_at timestamptz NOT NULL, payload jsonb NOT NULL)"
@@ -25,6 +29,7 @@ class PostgresStore:
                 "CREATE TABLE IF NOT EXISTS agent_runs (id text PRIMARY KEY, conversation_id text NOT NULL REFERENCES agent_conversations(id), tenant_id text NOT NULL, principals text[] NOT NULL, payload jsonb NOT NULL)"
             )
             await connection.commit()
+        logger.info("Postgres state store tables ready")
 
     async def get_or_create_conversation(
         self,

@@ -1,5 +1,6 @@
 import hmac
 import json
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,6 +49,8 @@ from app.tools.python_worker import IsolatedPythonTool
 from app.tools.sql import ExecuteSqlTool, PostgresBackend, SchemaSearchTool
 from app.tools.stubs import build_tool_registry
 from app.tools.web import BraveSearchBackend, HttpFetchTool, SafeHttpFetcher, WebSearchTool
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 if settings.state_backend == "postgres":
@@ -191,11 +194,35 @@ runtime = AgentRuntime(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level),
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    logger.info(
+        "Starting %s (env=%s, provider=%s)",
+        settings.app_name,
+        settings.app_env,
+        runtime.provider.name,
+    )
+    logger.info(
+        "Backends: knowledge=%s, web_search=%s, http_fetch=%s, sql=%s, "
+        "python=%s, browser=%s, state=%s",
+        settings.knowledge_backend,
+        settings.web_search_backend,
+        settings.http_fetch_backend,
+        settings.sql_backend,
+        settings.python_backend,
+        settings.browser_backend,
+        settings.state_backend,
+    )
     try:
         if isinstance(store, PostgresStore):
             await store.initialize()
+            logger.info("Postgres state store initialized")
         yield
     finally:
+        logger.info("Shutting down %s", settings.app_name)
         await runtime.provider.aclose()
         await knowledge_service.aclose()
         if event_buffer:
@@ -517,7 +544,11 @@ async def chat(
         ):
             final_event = item
     except KeyError as exc:
+        logger.warning("Chat request failed: conversation not found (%s)", exc)
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Chat request failed with unexpected error")
+        raise HTTPException(status_code=500, detail="Agent run failed") from exc
 
     if final_event is None:
         raise HTTPException(status_code=500, detail="Agent produced no events")
@@ -548,15 +579,24 @@ async def chat_stream(
             raise HTTPException(status_code=404, detail="Conversation not found")
 
     async def generate() -> AsyncIterator[str]:
-        async for item in runtime.stream(
-            query=request.query.strip(),
-            conversation_id=request.conversation_id,
-            access_context=access_context,
-        ):
-            if event_buffer:
-                await event_buffer.append(item)
-            payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
-            yield f"event: {item.event}\ndata: {payload}\n\n"
+        logger.info(
+            "Starting streaming chat run (tenant=%s, conversation_id=%s)",
+            access_context.tenant_id,
+            request.conversation_id or "new",
+        )
+        try:
+            async for item in runtime.stream(
+                query=request.query.strip(),
+                conversation_id=request.conversation_id,
+                access_context=access_context,
+            ):
+                if event_buffer:
+                    await event_buffer.append(item)
+                payload = json.dumps(item.model_dump(mode="json"), ensure_ascii=False)
+                yield f"event: {item.event}\ndata: {payload}\n\n"
+        except Exception:
+            logger.exception("Streaming chat run failed")
+            raise
 
     return StreamingResponse(
         generate(),

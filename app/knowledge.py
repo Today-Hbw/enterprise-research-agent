@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 from abc import ABC, abstractmethod
@@ -10,6 +11,8 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import httpx
 from pydantic import AnyHttpUrl, BaseModel, Field, StringConstraints
+
+logger = logging.getLogger(__name__)
 
 PrincipalId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 
@@ -465,6 +468,13 @@ class KnowledgeService:
     ) -> IndexedKnowledgeDocument:
         document_id = document_id or f"doc_{uuid4().hex}"
         spans = self._chunk_spans(document.content)
+        logger.info(
+            "Indexing document: document_id=%s, tenant=%s, chunks=%d, content_length=%d",
+            document_id,
+            tenant_id,
+            len(spans),
+            len(document.content),
+        )
         chunks = [
             KnowledgeChunk(
                 point_id=str(uuid5(NAMESPACE_URL, f"{document_id}:{index}")),
@@ -485,6 +495,12 @@ class KnowledgeService:
             for index, (start, end) in enumerate(spans)
         ]
         await self.backend.upsert(chunks)
+        logger.info(
+            "Document indexed successfully: document_id=%s, tenant=%s, chunks=%d",
+            document_id,
+            tenant_id,
+            len(chunks),
+        )
         return IndexedKnowledgeDocument(
             document_id=document_id,
             tenant_id=tenant_id,
@@ -504,6 +520,14 @@ class KnowledgeService:
     ) -> list[KnowledgeMatch]:
         vector = self.embedder.embed(query)
         bounded_top_k = max(1, min(top_k, 10))
+        logger.debug(
+            "Knowledge search: tenant=%s, query_length=%d, top_k=%d, ranking=%s, kb_id=%s",
+            tenant_id,
+            len(query),
+            bounded_top_k,
+            self.ranking,
+            knowledge_base_id,
+        )
         candidate_top_k = (
             max(bounded_top_k, self.rerank_candidate_k)
             if self.reranker == "token_overlap"
@@ -535,7 +559,13 @@ class KnowledgeService:
             )
         if self.reranker == "token_overlap":
             matches = self._token_overlap_reranker.rerank(query, matches)
-        return matches[:bounded_top_k]
+        results = matches[:bounded_top_k]
+        logger.info(
+            "Knowledge search returned %d result(s): tenant=%s",
+            len(results),
+            tenant_id,
+        )
+        return results
 
     async def aclose(self) -> None:
         await self.backend.aclose()

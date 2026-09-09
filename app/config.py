@@ -26,9 +26,7 @@ class Settings(BaseSettings):
     openai_timeout_seconds: float = Field(default=45, gt=0, le=300)
     doubao_api_key: SecretStr | None = None
     doubao_model: str = Field(default="doubao-seed-2-0-lite-260215", min_length=1)
-    doubao_base_url: str = Field(
-        default="https://ark.cn-beijing.volces.com/api/v3", min_length=1
-    )
+    doubao_base_url: str = Field(default="https://ark.cn-beijing.volces.com/api/v3", min_length=1)
     doubao_timeout_seconds: float = Field(default=45, gt=0, le=300)
     llm_input_cost_per_million_tokens: float | None = Field(default=None, ge=0)
     llm_output_cost_per_million_tokens: float | None = Field(default=None, ge=0)
@@ -90,6 +88,8 @@ class Settings(BaseSettings):
     redis_url: SecretStr | None = None
     redis_event_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
 
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
     @model_validator(mode="after")
     def require_rates_for_cost_budget(self) -> Self:
         has_input_rate = self.llm_input_cost_per_million_tokens is not None
@@ -110,9 +110,7 @@ class Settings(BaseSettings):
             else ""
         )
         if not api_key:
-            raise ValueError(
-                "RAG_PLATFORM_API_KEY is required when KNOWLEDGE_BACKEND=rag-platform"
-            )
+            raise ValueError("RAG_PLATFORM_API_KEY is required when KNOWLEDGE_BACKEND=rag-platform")
         if self.knowledge_ranking != "hybrid":
             raise ValueError(
                 "KNOWLEDGE_RANKING=hybrid is required when KNOWLEDGE_BACKEND=rag-platform"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,8 @@ import httpx
 
 from app.config import Settings
 from app.models import AgentDecision, Message, ToolCall, ToolResult, ToolSpec
+
+logger = logging.getLogger(__name__)
 
 
 class ProviderConfigurationError(ValueError):
@@ -222,6 +225,16 @@ class ResponsesAPIProvider(LLMProvider):
         response_id = self._require_string(response, "id")
         calls = self._parse_tool_calls(response)
         input_tokens, output_tokens = self._usage(response)
+        logger.info(
+            "%s Responses API call (model=%s): response_id=%s, "
+            "input_tokens=%d, output_tokens=%d, tool_calls=%d",
+            self._provider_name,
+            self._model,
+            response_id,
+            input_tokens,
+            output_tokens,
+            len(calls),
+        )
         if calls:
             self._runs[run_id] = _ResponsesRunState(
                 previous_response_id=response_id,
@@ -267,16 +280,48 @@ class ResponsesAPIProvider(LLMProvider):
                 timeout=self._timeout_seconds,
             )
             response.raise_for_status()
+        except httpx.TimeoutException as exc:
+            logger.error(
+                "%s Responses API timed out after %ss (model=%s): %s",
+                self._provider_name,
+                self._timeout_seconds,
+                self._model,
+                exc,
+            )
+            raise ProviderProtocolError(
+                f"{self._provider_name} Responses request timed out: {exc}"
+            ) from exc
+        except httpx.HTTPStatusError as exc:
+            logger.error(
+                "%s Responses API HTTP error: status=%d",
+                self._provider_name,
+                exc.response.status_code,
+            )
+            raise ProviderProtocolError(
+                f"{self._provider_name} Responses request failed with status "
+                f"{exc.response.status_code}: {exc}"
+            ) from exc
         except httpx.HTTPError as exc:
+            logger.error(
+                "%s Responses API request failed: %s",
+                self._provider_name,
+                exc,
+            )
             raise ProviderProtocolError(
                 f"{self._provider_name} Responses request failed: {exc}"
             ) from exc
         body = response.json()
         if not isinstance(body, dict):
+            logger.error(
+                "%s Responses API returned non-object response: %s",
+                self._provider_name,
+                type(body).__name__,
+            )
             raise ProviderProtocolError(
                 f"{self._provider_name} Responses response must be a JSON object"
             )
         if body.get("error"):
+            logger.error("%s Responses API returned an error", self._provider_name)
             raise ProviderProtocolError(f"{self._provider_name} Responses returned an API error")
         return body
 

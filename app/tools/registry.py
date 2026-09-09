@@ -1,7 +1,10 @@
 import asyncio
+import logging
 
 from app.models import AccessContext, ToolCall, ToolPermission, ToolResult, ToolSpec
 from app.tools.base import BaseTool
+
+logger = logging.getLogger(__name__)
 
 _PERMISSION_RANK = {
     ToolPermission.LOW: 0,
@@ -36,6 +39,7 @@ class ToolRegistry:
     ) -> ToolResult:
         tool = self._tools.get(call.name)
         if tool is None:
+            logger.warning("Tool not registered: %s", call.name)
             return ToolResult(
                 call_id=call.call_id,
                 tool_name=call.name,
@@ -44,6 +48,12 @@ class ToolRegistry:
                 error=f"Unknown tool: {call.name}",
             )
         if _PERMISSION_RANK[tool.permission] > _PERMISSION_RANK[self.max_permission]:
+            logger.warning(
+                "Tool permission denied: %s (required=%s, max=%s)",
+                call.name,
+                tool.permission,
+                self.max_permission,
+            )
             return ToolResult(
                 call_id=call.call_id,
                 tool_name=call.name,
@@ -54,11 +64,25 @@ class ToolRegistry:
                     f"{self.max_permission}."
                 ),
             )
+        logger.debug(
+            "Executing tool %s: call_id=%s, args=%s",
+            call.name,
+            call.call_id,
+            list(call.arguments.keys()),
+        )
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 tool.execute(call, access_context), timeout=tool.timeout_seconds
             )
+            logger.debug(
+                "Tool %s completed: success=%s, summary=%s",
+                call.name,
+                result.success,
+                (result.summary or "")[:100],
+            )
+            return result
         except TimeoutError:
+            logger.warning("Tool %s timed out after %ss", call.name, tool.timeout_seconds)
             return ToolResult(
                 call_id=call.call_id,
                 tool_name=call.name,
@@ -67,6 +91,7 @@ class ToolRegistry:
                 error=f"Tool timed out after {tool.timeout_seconds}s",
             )
         except Exception as exc:  # Tool boundary: normalize implementation failures.
+            logger.exception("Tool %s failed with exception: %s", call.name, exc)
             return ToolResult(
                 call_id=call.call_id,
                 tool_name=call.name,

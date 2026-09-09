@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from time import perf_counter
 
@@ -23,6 +24,8 @@ from app.models import (
 )
 from app.store import InMemoryStore
 from app.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class AgentRuntime:
@@ -107,6 +110,14 @@ class AgentRuntime:
             ),
         )
         await self.store.save_run(run)
+        logger.info(
+            "Run started: run_id=%s, conversation_id=%s, tenant=%s, model=%s, query_length=%d",
+            run.run_id,
+            run.conversation_id,
+            run.tenant_id,
+            run.model,
+            len(query),
+        )
         sequence = 0
 
         def event(name: str, **data: object) -> StreamEvent:
@@ -123,16 +134,18 @@ class AgentRuntime:
 
         try:
             async with asyncio.timeout(self.settings.run_timeout_seconds):
-                async for emitted in self._execute(
-                    run, history, access_context, event
-                ):
+                async for emitted in self._execute(run, history, access_context, event):
                     yield emitted
         except TimeoutError:
             run.status = RunStatus.FAILED
             run.error = f"Run timed out after {self.settings.run_timeout_seconds}s"
+            logger.error(
+                "Run %s timed out after %ss", run.run_id, self.settings.run_timeout_seconds
+            )
         except Exception as exc:
             run.status = RunStatus.FAILED
             run.error = str(exc)
+            logger.exception("Run %s failed: %s", run.run_id, exc)
         finally:
             await self.provider.finish_run(run.run_id)
 
@@ -147,6 +160,16 @@ class AgentRuntime:
         await self.store.save_run(run)
 
         if run.status == RunStatus.COMPLETED and run.final_answer:
+            logger.info(
+                "Run %s completed: duration=%dms, tokens=%d, tools=%d, cost=%s",
+                run.run_id,
+                run.metrics.duration_ms,
+                run.metrics.token_usage,
+                run.metrics.tool_call_count,
+                f"${run.metrics.estimated_cost:.8f}"
+                if run.metrics.estimated_cost is not None
+                else "N/A",
+            )
             await self.store.add_message(
                 conversation.conversation_id,
                 Message(
@@ -157,6 +180,12 @@ class AgentRuntime:
             )
             yield event("run_completed", run=run.model_dump(mode="json"))
         else:
+            logger.warning(
+                "Run %s failed: error=%s, duration=%dms",
+                run.run_id,
+                run.error,
+                run.metrics.duration_ms,
+            )
             yield event(
                 "run_failed",
                 error=run.error or "Agent run failed",
@@ -184,17 +213,26 @@ class AgentRuntime:
                 step=step_index,
                 run_id=run.run_id,
             )
+            decision_duration_ms = int((perf_counter() - decision_started) * 1000)
             run.metrics.llm_call_count += 1
             run.metrics.input_tokens += decision.input_tokens
             run.metrics.output_tokens += decision.output_tokens
             run.metrics.token_usage += decision.input_tokens + decision.output_tokens
             self._update_estimated_cost(run)
+            logger.info(
+                "Run %s LLM decision (step=%d): %d input tokens, %d output tokens, %dms",
+                run.run_id,
+                step_index,
+                decision.input_tokens,
+                decision.output_tokens,
+                decision_duration_ms,
+            )
             run.trace.append(
                 TraceStep(
                     index=len(run.trace),
                     kind="agent_decision",
                     summary=decision.decision_summary,
-                    duration_ms=int((perf_counter() - decision_started) * 1000),
+                    duration_ms=decision_duration_ms,
                 )
             )
             yield event_factory(
@@ -224,9 +262,18 @@ class AgentRuntime:
                 call for call in decision.tool_calls if call.signature not in call_signatures
             ]
             if not fresh_calls:
+                logger.warning(
+                    "Run %s: repeated tool call detected at step %d", run.run_id, step_index
+                )
                 raise RuntimeError("Repeated tool call detected; agent stopped to prevent a loop")
             for call in fresh_calls:
                 call_signatures.add(call.signature)
+            logger.debug(
+                "Run %s: %d fresh tool call(s): %s",
+                run.run_id,
+                len(fresh_calls),
+                [f"{c.name}({list(c.arguments.keys())})" for c in fresh_calls],
+            )
 
             plan_event = self._sync_plan(run, fresh_calls)
             await self.store.save_run(run)
@@ -261,6 +308,13 @@ class AgentRuntime:
             for call, result, duration_ms in executed:
                 prior_results.append(result)
                 run.metrics.tool_call_count += 1
+                logger.info(
+                    "Run %s tool %s: %s in %dms",
+                    run.run_id,
+                    call.name,
+                    "completed" if result.success else "failed",
+                    duration_ms,
+                )
                 run.trace.append(
                     TraceStep(
                         index=len(run.trace),
@@ -292,6 +346,7 @@ class AgentRuntime:
                 yield event_factory("plan_step_updated", step=plan_step.model_dump(mode="json"))
             await self.store.save_run(run)
 
+        logger.warning("Run %s reached max_steps=%d", run.run_id, self.settings.max_steps)
         raise RuntimeError(f"Agent reached max_steps={self.settings.max_steps}")
 
     def _sync_plan(self, run: RunRecord, calls: list[ToolCall]) -> str | None:
