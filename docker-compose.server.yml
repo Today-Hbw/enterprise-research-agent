@@ -1,0 +1,46 @@
+name: enterprise-research-agent
+
+services:
+  agent:
+    image: ${AGENT_IMAGE:?AGENT_IMAGE must name the image built for this release}
+    build:
+      context: .
+      args:
+        APP_REVISION: ${APP_REVISION:-development}
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple/}
+    container_name: enterprise-research-agent
+    network_mode: host
+    ipc: host
+    init: true
+    restart: unless-stopped
+    env_file:
+      - path: ${APP_ENV_FILE:-/mnt/enterprise-research-agent/shared/config/app.env}
+        required: true
+    environment:
+      # The host service used a private browser path and LD_LIBRARY_PATH. The image
+      # carries its own Chromium and native libraries instead.
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      LD_LIBRARY_PATH: ""
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,exec,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 20m
+        max-file: "3"

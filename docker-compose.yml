@@ -1,9 +1,9 @@
 services:
   qdrant:
-    image: qdrant/qdrant:latest
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:latest}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:6333:6333"
+      - "${COMPOSE_QDRANT_BIND_ADDRESS:-127.0.0.1}:${COMPOSE_QDRANT_PORT:-6333}:6333"
     environment:
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-local-qdrant-key}
     volumes:
@@ -12,23 +12,26 @@ services:
   agent:
     build: .
     ports:
-      - "127.0.0.1:8000:8000"
+      - "${COMPOSE_APP_BIND_ADDRESS:-127.0.0.1}:${COMPOSE_APP_PORT:-8000}:8000"
     depends_on:
       - qdrant
+    env_file:
+      - path: ${COMPOSE_ENV_FILE:-.env}
+        required: false
     environment:
-      APP_ENV: demo
-      MAX_STEPS: 8
+      APP_ENV: ${APP_ENV:-demo}
+      MAX_STEPS: ${MAX_STEPS:-8}
       RUN_TIMEOUT_SECONDS: ${RUN_TIMEOUT_SECONDS:-120}
-      TOOL_TIMEOUT_SECONDS: 5
-      MAX_PARALLEL_TOOLS: 4
+      TOOL_TIMEOUT_SECONDS: ${TOOL_TIMEOUT_SECONDS:-5}
+      MAX_PARALLEL_TOOLS: ${MAX_PARALLEL_TOOLS:-4}
       LLM_PROVIDER: ${LLM_PROVIDER:-deterministic}
       DOUBAO_API_KEY: ${DOUBAO_API_KEY:-}
       DOUBAO_MODEL: ${DOUBAO_MODEL:-doubao-seed-2-0-lite-260215}
       DOUBAO_BASE_URL: ${DOUBAO_BASE_URL:-https://ark.cn-beijing.volces.com/api/v3}
-      KNOWLEDGE_BACKEND: qdrant
+      KNOWLEDGE_BACKEND: ${KNOWLEDGE_BACKEND:-qdrant}
       KNOWLEDGE_ADMIN_TOKEN: ${KNOWLEDGE_ADMIN_TOKEN:-local-demo-admin-token}
-      KNOWLEDGE_TRUST_ACCESS_HEADERS: "true"
-      QDRANT_URL: http://qdrant:6333
+      KNOWLEDGE_TRUST_ACCESS_HEADERS: ${KNOWLEDGE_TRUST_ACCESS_HEADERS:-true}
+      QDRANT_URL: ${QDRANT_URL:-http://qdrant:6333}
       QDRANT_API_KEY: ${QDRANT_API_KEY:-local-qdrant-key}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]

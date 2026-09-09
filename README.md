@@ -81,7 +81,7 @@ The application now runs entirely offline. Submit a research query to observe pl
 docker compose up --build
 ```
 
-Compose starts the agent and Qdrant on localhost. Its fallback credentials are intended only for local development. Set strong, random values for `KNOWLEDGE_ADMIN_TOKEN` and `QDRANT_API_KEY` before exposing the stack.
+Compose starts the agent and Qdrant on localhost. It loads application settings from `.env` when that file exists; `COMPOSE_ENV_FILE` can point to a different env file, while the bind addresses and published ports are controlled by the `COMPOSE_*` variables documented in `.env.example`. Its fallback credentials are intended only for local development. Set strong, random values for `KNOWLEDGE_ADMIN_TOKEN` and `QDRANT_API_KEY` before exposing the stack.
 
 ## Enable Live Capabilities
 
