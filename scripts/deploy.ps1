@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [string]$KeyPath = $env:ERA_SSH_KEY,
-    [string]$Server = "ben@rag-platform.example.com",
+    [string]$Server = $env:ERA_SERVER,
+    [string]$PublicUrl = $env:ERA_PUBLIC_URL,
     [int]$Port = 22,
     [switch]$SkipTests
 )
@@ -14,6 +15,9 @@ $scp = Join-Path $openSshRoot "scp.exe"
 
 if (-not $KeyPath -or -not (Test-Path -LiteralPath $KeyPath)) {
     throw "Pass -KeyPath or set ERA_SSH_KEY to the SSH private-key path."
+}
+if (-not $Server) {
+    throw "Pass -Server or set ERA_SERVER to the SSH target (for example, user@host)."
 }
 if (-not (Test-Path -LiteralPath $ssh) -or -not (Test-Path -LiteralPath $scp)) {
     throw "Windows OpenSSH client is required."
@@ -99,7 +103,9 @@ try {
     }
 
     Write-Host "Deployed $image"
-    Write-Host "Open http://rag-platform.example.com:8000"
+    if ($PublicUrl) {
+        Write-Host "Open $PublicUrl"
+    }
 }
 finally {
     Pop-Location

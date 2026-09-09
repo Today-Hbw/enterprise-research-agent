@@ -148,7 +148,7 @@ curl http://rag-platform.example.com:8001/api/v1/knowledge-bases \
 curl -X POST http://rag-platform.example.com:8001/api/v1/knowledge-bases/123456/search \
   -H "Authorization: Bearer $RAG_PLATFORM_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"query":"employee benefits policy","top_k":3,"include_content":true}'
+  -d '{"query":"Summarize the employee benefits policy","top_k":3,"include_content":true}'
 ```
 
 When enabled, the Agent receives a `knowledge_base_list` discovery tool and a
@@ -199,8 +199,13 @@ curl -N -X POST http://localhost:8000/api/chat/stream \
 ```bash
 pytest
 ruff check .
+gitleaks git . --config .gitleaks.toml --redact=100 --no-banner
 python -m app.evaluation --dataset evals/demo.json --output output/evaluation/demo-report.json
 ```
+
+Install the pre-commit hooks with `uv run pre-commit install`. The same Gitleaks scan runs
+in GitHub Actions against the complete repository history and rejects common credentials
+and raw public IPv4 addresses. Use DNS names or environment variables for deployment hosts.
 
 The evaluation runner exercises the real Agent Runtime and knowledge retrieval path, writes a JSON report, and exits with status `1` when a configured threshold is missed. It covers tool routing, citations, Recall@K, MRR, Hit Rate, call counts, and latency. It is a structural regression suite, not a claim of production answer quality.
 

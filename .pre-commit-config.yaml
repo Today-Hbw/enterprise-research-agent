@@ -1,0 +1,7 @@
+# Local secret-scanning guard. Install with: uv run pre-commit install
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.29.1
+    hooks:
+      - id: gitleaks
+        args: [--config=.gitleaks.toml]
