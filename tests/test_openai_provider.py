@@ -78,7 +78,7 @@ async def test_openai_provider_round_trips_tool_output_and_token_usage() -> None
         second = await provider.decide(
             query="Research supplier concentration.",
             history=build_messages(),
-            available_tools=tools,
+            available_tools=[],
             prior_results=[
                 ToolResult(
                     call_id="model_call_1",
@@ -107,6 +107,10 @@ async def test_openai_provider_round_trips_tool_output_and_token_usage() -> None
     assert payloads[0]["tools"][0]["type"] == "function"
     assert payloads[0]["tools"][0]["parameters"] == tools[0].input_schema
     assert payloads[1]["previous_response_id"] == "resp_first"
+    assert "tools" not in payloads[1]
+    assert "parallel_tool_calls" not in payloads[1]
+    assert payloads[1]["tool_choice"] == "none"
+    assert "Produce the best final answer now" in payloads[1]["instructions"]
     assert {item["call_id"] for item in payloads[1]["input"]} == {
         "model_call_1",
         "model_call_2",

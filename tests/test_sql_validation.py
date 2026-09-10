@@ -2,10 +2,18 @@ import json
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+import psycopg
 import pytest
 
 from app.models import ToolCall
-from app.tools.sql import ExecuteSqlTool, SqlValidationError, validate_readonly_sql
+from app.tools.sql import (
+    ExecuteSqlTool,
+    SchemaColumn,
+    SchemaSearchTool,
+    SchemaTable,
+    SqlValidationError,
+    validate_readonly_sql,
+)
 
 
 @pytest.mark.parametrize(
@@ -66,3 +74,59 @@ async def test_execute_sql_converts_database_values_to_json_primitives() -> None
 
     json.dumps(result.data)
     assert result.data["rows"] == [["2026-09-08T12:30:00Z", "2026-09-09", "1.25"]]
+
+
+@pytest.mark.asyncio
+async def test_schema_search_returns_column_types() -> None:
+    class Backend:
+        async def search_schema(self, query):
+            return [
+                SchemaTable(
+                    schema="public",
+                    name="documents",
+                    columns=(
+                        SchemaColumn(
+                            name="document_id",
+                            data_type="character varying",
+                            udt_name="varchar",
+                            nullable=False,
+                        ),
+                    ),
+                )
+            ]
+
+    result = await SchemaSearchTool(Backend(), timeout_seconds=1).execute(
+        ToolCall(name="schema_search", arguments={"query": "documents"})
+    )
+
+    assert result.data["tables"][0]["columns"] == [
+        {
+            "name": "document_id",
+            "data_type": "character varying",
+            "udt_name": "varchar",
+            "nullable": False,
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_execute_sql_returns_typed_database_error_without_raising() -> None:
+    class Backend:
+        max_rows = 10
+
+        async def execute_readonly(self, statement, access_context):
+            raise psycopg.errors.UndefinedFunction(
+                "operator does not exist: character varying = integer"
+            )
+
+    result = await ExecuteSqlTool(Backend(), timeout_seconds=1).execute(
+        ToolCall(
+            name="execute_sql",
+            arguments={"sql": "SELECT * FROM public.documents WHERE document_id = 123"},
+        )
+    )
+
+    assert result.success is False
+    assert result.summary == "PostgreSQL rejected the read-only query."
+    assert result.data["sqlstate"] == "42883"
+    assert "quote character/text identifiers" in result.data["hint"]

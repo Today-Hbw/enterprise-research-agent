@@ -198,11 +198,16 @@ class ResponsesAPIProvider(LLMProvider):
         state = self._runs.get(run_id)
         payload: dict[str, Any] = {
             "model": self._model,
-            "instructions": self._instructions(),
-            "tools": tools,
-            "parallel_tool_calls": True,
+            "instructions": self._instructions(force_synthesis=not tools),
             "store": True,
         }
+        if tools:
+            payload["tools"] = tools
+            payload["parallel_tool_calls"] = True
+        else:
+            # Responses continuations may retain the previous turn's tool catalog.
+            # Explicitly disable tool selection instead of relying on an omitted tools field.
+            payload["tool_choice"] = "none"
 
         if state is None:
             payload["input"] = [
@@ -421,17 +426,30 @@ class ResponsesAPIProvider(LLMProvider):
         return result
 
     @staticmethod
-    def _instructions() -> str:
-        return (
+    def _instructions(*, force_synthesis: bool = False) -> str:
+        instructions = (
             "You are a traceable enterprise research agent. Use supplied function tools when "
             "external or enterprise evidence is needed. Prefer low-cost read-only tools. Use the "
             "browser for explicit interactive tasks or as a fallback when http_fetch is blocked by "
-            "the source site or cannot render the required content. Do not repeat an identical "
-            "failed tool call. After receiving tool outputs, synthesize "
-            "a concise answer and distinguish demo placeholder evidence from live evidence. Never "
-            "reveal "
+            "the source site or cannot render the required content. Never retry a failed tool "
+            "unless its arguments materially correct the reported error. For SQL, inspect "
+            "schema_search "
+            "column data_type metadata before comparing values; quote text identifiers and do not "
+            "guess columns. Treat two empty SQL results as evidence that the requested records may "
+            "not exist. Once the collected evidence answers the request, stop using tools and "
+            "synthesize a concise answer. Distinguish demo placeholder evidence from live "
+            "evidence. "
+            "Never reveal "
             "hidden chain-of-thought; provide only a brief decision summary through tool usage."
         )
+        if force_synthesis:
+            instructions += (
+                " No tools are available in this step because evidence collection is complete or "
+                "the remaining tools were stopped by server policy. Produce the best final answer "
+                "now from the collected outputs, cite available evidence, and state any material "
+                "gap."
+            )
+        return instructions
 
 
 class OpenAIResponsesProvider(ResponsesAPIProvider):

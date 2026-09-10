@@ -19,10 +19,18 @@ class SqlValidationError(ValueError):
 
 
 @dataclass(frozen=True)
+class SchemaColumn:
+    name: str
+    data_type: str
+    udt_name: str
+    nullable: bool
+
+
+@dataclass(frozen=True)
 class SchemaTable:
     schema: str
     name: str
-    columns: tuple[str, ...]
+    columns: tuple[SchemaColumn, ...]
 
 
 @dataclass(frozen=True)
@@ -47,7 +55,8 @@ class PostgresBackend:
             async with connection.cursor() as cursor:
                 await cursor.execute(
                     """
-                    SELECT table_schema, table_name, column_name
+                    SELECT table_schema, table_name, column_name,
+                           data_type, udt_name, is_nullable
                     FROM information_schema.columns
                     WHERE table_schema = ANY(%s)
                     ORDER BY table_schema, table_name, ordinal_position
@@ -55,9 +64,16 @@ class PostgresBackend:
                     [list(self.allowed_schemas)],
                 )
                 rows = await cursor.fetchall()
-        tables: dict[tuple[str, str], list[str]] = {}
-        for schema_name, table_name, column_name in rows:
-            tables.setdefault((schema_name, table_name), []).append(column_name)
+        tables: dict[tuple[str, str], list[SchemaColumn]] = {}
+        for schema_name, table_name, column_name, data_type, udt_name, is_nullable in rows:
+            tables.setdefault((schema_name, table_name), []).append(
+                SchemaColumn(
+                    name=column_name,
+                    data_type=data_type,
+                    udt_name=udt_name,
+                    nullable=is_nullable == "YES",
+                )
+            )
         results = [
             SchemaTable(schema, name, tuple(columns)) for (schema, name), columns in tables.items()
         ]
@@ -67,7 +83,11 @@ class PostgresBackend:
             table
             for table in results
             if terms.intersection(
-                {table.schema.lower(), table.name.lower(), *(c.lower() for c in table.columns)}
+                {
+                    table.schema.lower(),
+                    table.name.lower(),
+                    *(column.name.lower() for column in table.columns),
+                }
             )
         ]
         return matched or results
@@ -141,7 +161,10 @@ def validate_readonly_sql(statement: str, allowed_schemas: frozenset[str]) -> ex
 
 class SchemaSearchTool(BaseTool):
     name = "schema_search"
-    description = "Search approved PostgreSQL schema metadata."
+    description = (
+        "Search approved PostgreSQL schema metadata, including each column's PostgreSQL data "
+        "type. Always use these types before composing execute_sql comparisons."
+    )
     input_schema = {
         "type": "object",
         "properties": {"query": {"type": "string", "minLength": 1}},
@@ -170,7 +193,20 @@ class SchemaSearchTool(BaseTool):
         tables = await self.backend.search_schema(query)
         data = {
             "tables": [
-                {"schema": t.schema, "name": t.name, "columns": list(t.columns)} for t in tables
+                {
+                    "schema": table.schema,
+                    "name": table.name,
+                    "columns": [
+                        {
+                            "name": column.name,
+                            "data_type": column.data_type,
+                            "udt_name": column.udt_name,
+                            "nullable": column.nullable,
+                        }
+                        for column in table.columns
+                    ],
+                }
+                for table in tables
             ]
         }
         return ToolResult(
@@ -192,7 +228,8 @@ class SchemaSearchTool(BaseTool):
 class ExecuteSqlTool(BaseTool):
     name = "execute_sql"
     description = (
-        "Execute one AST-validated read-only SQL query against approved PostgreSQL schemas."
+        "Execute one AST-validated read-only SQL query against approved PostgreSQL schemas. "
+        "Use schema_search first and respect the returned column data types."
     )
     input_schema = {
         "type": "object",
@@ -221,6 +258,28 @@ class ExecuteSqlTool(BaseTool):
                 success=False,
                 summary="SQL validator rejected the statement.",
                 error=str(exc),
+            )
+        except psycopg.Error as exc:
+            sqlstate = exc.sqlstate
+            if sqlstate == "42883":
+                hint = (
+                    "PostgreSQL reported an operator/type mismatch. Re-check schema_search "
+                    "data_type values; quote character/text identifiers instead of comparing "
+                    "them with numeric literals."
+                )
+            else:
+                hint = (
+                    "Review the schema_search column metadata and correct the read-only query "
+                    "before retrying."
+                )
+            message = str(exc).strip() or type(exc).__name__
+            return ToolResult(
+                call_id=call.call_id,
+                tool_name=self.name,
+                success=False,
+                summary="PostgreSQL rejected the read-only query.",
+                data={"sqlstate": sqlstate, "hint": hint},
+                error=message[:1000],
             )
         return ToolResult(
             call_id=call.call_id,

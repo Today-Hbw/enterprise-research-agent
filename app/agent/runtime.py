@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from collections.abc import AsyncIterator
 from time import perf_counter
 
@@ -29,6 +30,44 @@ logger = logging.getLogger(__name__)
 
 
 class AgentRuntime:
+    _TOOL_CALL_LIMITS = {
+        "knowledge_base_list": 1,
+        "knowledge_search": 4,
+        "web_search": 2,
+        "http_fetch": 3,
+        "schema_search": 2,
+        "execute_sql": 4,
+        "python_execute": 2,
+        "browser": 2,
+        "mcp_invoke": 3,
+    }
+    _TOOL_FAILURE_LIMITS = {
+        # Network tools are expensive and retrying the same unavailable backend rarely helps.
+        "web_search": 1,
+        "http_fetch": 2,
+        "browser": 2,
+        "mcp_invoke": 2,
+        # SQL may be corrected once after the database returns a typed diagnostic.
+        "schema_search": 2,
+        "execute_sql": 2,
+        "knowledge_base_list": 2,
+        "knowledge_search": 2,
+        "python_execute": 2,
+    }
+    _SQL_INTENT_TOKENS = (
+        "sql",
+        "数据库",
+        "数据分析",
+        "统计",
+        "报表",
+        "总计",
+        "合计",
+        "平均",
+        "趋势",
+        "占比",
+        "同比",
+        "环比",
+    )
     _PLAN_COPY = {
         "knowledge_search": (
             "Search internal knowledge",
@@ -201,14 +240,47 @@ class AgentRuntime:
     ) -> AsyncIterator[StreamEvent]:
         prior_results: list[ToolResult] = []
         call_signatures: set[str] = set()
+        tool_call_counts: Counter[str] = Counter()
+        tool_failure_counts: Counter[str] = Counter()
+        empty_sql_results = 0
+        synthesis_forced = False
+        blocked_synthesis_rounds = 0
 
         for step_index in range(self.settings.max_steps):
             self._enforce_budget(run)
+            if not self.provider.is_demo:
+                if self._has_sufficient_evidence(run.user_query, prior_results):
+                    synthesis_forced = True
+                elif self._query_requires_sql(run.user_query) and (
+                    empty_sql_results >= 2
+                    or tool_failure_counts["execute_sql"]
+                    >= self._TOOL_FAILURE_LIMITS["execute_sql"]
+                ):
+                    synthesis_forced = True
+            available_tools = self._available_tools(
+                tool_call_counts=tool_call_counts,
+                tool_failure_counts=tool_failure_counts,
+                empty_sql_results=empty_sql_results,
+                force_synthesis=synthesis_forced,
+            )
+            if not available_tools and not synthesis_forced:
+                synthesis_forced = True
+                logger.info(
+                    "Run %s has no eligible tools remaining; forcing synthesis at step %d",
+                    run.run_id,
+                    step_index,
+                )
+            elif synthesis_forced:
+                logger.info(
+                    "Run %s evidence collection policy requires synthesis at step %d",
+                    run.run_id,
+                    step_index,
+                )
             decision_started = perf_counter()
             decision = await self.provider.decide(
                 query=run.user_query,
                 history=history,
-                available_tools=self.registry.specs(),
+                available_tools=available_tools,
                 prior_results=prior_results,
                 step=step_index,
                 run_id=run.run_id,
@@ -257,6 +329,32 @@ class AgentRuntime:
                 run.sources = self._deduplicate_sources(prior_results)
                 yield event_factory("assistant_delta", content=decision.final_answer)
                 return
+
+            if synthesis_forced:
+                blocked_synthesis_rounds += 1
+                logger.warning(
+                    "Run %s provider returned %d tool call(s) while synthesis was forced; "
+                    "returning policy-blocked outputs",
+                    run.run_id,
+                    len(decision.tool_calls),
+                )
+                if blocked_synthesis_rounds > 1:
+                    raise RuntimeError(
+                        "Model repeatedly requested tools after server policy required synthesis"
+                    )
+                prior_results.extend(
+                    ToolResult(
+                        call_id=call.call_id,
+                        tool_name=call.name,
+                        success=False,
+                        summary="Tool call blocked because evidence collection is complete.",
+                        error=(
+                            "Server policy requires the model to synthesize the final answer now."
+                        ),
+                    )
+                    for call in decision.tool_calls
+                )
+                continue
 
             fresh_calls = [
                 call for call in decision.tool_calls if call.signature not in call_signatures
@@ -307,6 +405,16 @@ class AgentRuntime:
             )
             for call, result, duration_ms in executed:
                 prior_results.append(result)
+                tool_call_counts[call.name] += 1
+                if result.success:
+                    tool_failure_counts[call.name] = 0
+                else:
+                    tool_failure_counts[call.name] += 1
+                if call.name == "execute_sql" and result.success:
+                    rows = result.data.get("rows")
+                    empty_sql_results = (
+                        empty_sql_results + 1 if isinstance(rows, list) and not rows else 0
+                    )
                 run.metrics.tool_call_count += 1
                 logger.info(
                     "Run %s tool %s: %s in %dms",
@@ -348,6 +456,68 @@ class AgentRuntime:
 
         logger.warning("Run %s reached max_steps=%d", run.run_id, self.settings.max_steps)
         raise RuntimeError(f"Agent reached max_steps={self.settings.max_steps}")
+
+    def _available_tools(
+        self,
+        *,
+        tool_call_counts: Counter[str],
+        tool_failure_counts: Counter[str],
+        empty_sql_results: int,
+        force_synthesis: bool,
+    ):
+        if force_synthesis:
+            return []
+        available = []
+        for spec in self.registry.specs():
+            call_limit = self._TOOL_CALL_LIMITS.get(spec.name, 3)
+            failure_limit = self._TOOL_FAILURE_LIMITS.get(spec.name, 2)
+            if tool_call_counts[spec.name] >= call_limit:
+                continue
+            if tool_failure_counts[spec.name] >= failure_limit:
+                continue
+            if spec.name == "execute_sql" and empty_sql_results >= 2:
+                continue
+            available.append(spec)
+        return available
+
+    @classmethod
+    def _has_sufficient_evidence(
+        cls, query: str, results: list[ToolResult]
+    ) -> bool:
+        usable_results = []
+        anchors: set[tuple[object, ...]] = set()
+        has_nonempty_sql = False
+        for result in results:
+            if not result.success:
+                continue
+            if result.tool_name == "execute_sql":
+                rows = result.data.get("rows")
+                if isinstance(rows, list) and rows:
+                    has_nonempty_sql = True
+                else:
+                    continue
+            if not result.sources:
+                continue
+            usable_results.append(result)
+            for source in result.sources:
+                anchors.add(
+                    (
+                        source.source_type,
+                        source.url,
+                        source.document_id,
+                        source.chunk_id,
+                        source.title,
+                    )
+                )
+
+        if cls._query_requires_sql(query):
+            return has_nonempty_sql
+        return len(anchors) >= 3 or len(usable_results) >= 2
+
+    @classmethod
+    def _query_requires_sql(cls, query: str) -> bool:
+        normalized_query = query.lower()
+        return any(token in normalized_query for token in cls._SQL_INTENT_TOKENS)
 
     def _sync_plan(self, run: RunRecord, calls: list[ToolCall]) -> str | None:
         created = not run.plan

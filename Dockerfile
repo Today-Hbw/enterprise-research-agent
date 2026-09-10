@@ -7,6 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000 \
+    PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright \
     PIP_INDEX_URL=${PIP_INDEX_URL}
 
 LABEL org.opencontainers.image.revision=${APP_REVISION}
@@ -16,8 +17,8 @@ WORKDIR /app
 # Playwright installs native browser dependencies through apt. Keep those
 # downloads on Tencent Cloud's Debian mirrors as well.
 RUN sed -i \
-    -e 's|http://deb.debian.org/debian|https://mirrors.cloud.tencent.com/debian|g' \
-    -e 's|https://deb.debian.org/debian|https://mirrors.cloud.tencent.com/debian|g' \
+    -e 's|http://deb.debian.org/debian|http://mirrors.cloud.tencent.com/debian|g' \
+    -e 's|https://deb.debian.org/debian|http://mirrors.cloud.tencent.com/debian|g' \
     /etc/apt/sources.list.d/debian.sources
 
 # Dependency and browser layers stay cached while only application code changes.
