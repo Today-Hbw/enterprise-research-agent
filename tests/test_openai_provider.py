@@ -11,7 +11,7 @@ from app.agent.provider import (
 )
 from app.agent.runtime import AgentRuntime
 from app.config import Settings
-from app.models import Message, MessageRole, ToolResult
+from app.models import Message, MessageRole, Source, SourceType, ToolResult
 from app.store import InMemoryStore
 from app.tools.stubs import build_stub_registry
 
@@ -21,7 +21,7 @@ def build_messages() -> list[Message]:
 
 
 @pytest.mark.asyncio
-async def test_openai_provider_round_trips_tool_output_and_token_usage() -> None:
+async def test_openai_provider_tool_exhaustion_uses_stateless_evidence_request() -> None:
     payloads: list[dict] = []
     responses = iter(
         [
@@ -86,6 +86,14 @@ async def test_openai_provider_round_trips_tool_output_and_token_usage() -> None
                     success=True,
                     summary="Market data found.",
                     data={"results": 3},
+                    sources=[
+                        Source(
+                            source_type=SourceType.WEB,
+                            title="Market source",
+                            url="https://example.com/market",
+                            content_snippet="Market evidence.",
+                        )
+                    ],
                 ),
                 ToolResult(
                     call_id="model_call_2",
@@ -104,18 +112,24 @@ async def test_openai_provider_round_trips_tool_output_and_token_usage() -> None
     assert second.final_answer == "Use a quarterly supplier review and monitor concentration."
     assert (second.input_tokens, second.output_tokens) == (80, 20)
     assert payloads[0]["parallel_tool_calls"] is True
+    assert "Use knowledge_search for policies" in payloads[0]["instructions"]
     assert payloads[0]["tools"][0]["type"] == "function"
     assert payloads[0]["tools"][0]["parameters"] == tools[0].input_schema
-    assert payloads[1]["previous_response_id"] == "resp_first"
+    assert "previous_response_id" not in payloads[1]
     assert "tools" not in payloads[1]
     assert "parallel_tool_calls" not in payloads[1]
     assert payloads[1]["tool_choice"] == "none"
     assert "Produce the best final answer now" in payloads[1]["instructions"]
-    assert {item["call_id"] for item in payloads[1]["input"]} == {
-        "model_call_1",
-        "model_call_2",
+    assert payloads[1]["input"][0] == {
+        "role": "user",
+        "content": "Research supplier concentration.",
     }
-    assert all(item["type"] == "function_call_output" for item in payloads[1]["input"])
+    evidence_prompt = payloads[1]["input"][1]
+    assert evidence_prompt["role"] == "user"
+    assert "No eligible tools remain" in evidence_prompt["content"]
+    evidence = json.loads(evidence_prompt["content"].split("Collected tool results:\n", 1)[1])
+    assert {item["call_id"] for item in evidence} == {"model_call_1", "model_call_2"}
+    assert evidence[0]["sources"][0]["content_snippet"] == "Market evidence."
 
 
 @pytest.mark.asyncio
@@ -152,6 +166,30 @@ async def test_openai_provider_rejects_invalid_function_json() -> None:
                 prior_results=[],
                 step=0,
                 run_id="run_invalid",
+            )
+
+
+@pytest.mark.asyncio
+async def test_openai_provider_timeout_error_includes_exception_type() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = OpenAIResponsesProvider(
+            api_key="test-secret",
+            model="test-model",
+            base_url="https://mock.openai.test/v1",
+            timeout_seconds=5,
+            http_client=client,
+        )
+        with pytest.raises(ProviderProtocolError, match="ReadTimeout"):
+            await provider.decide(
+                query="test",
+                history=build_messages(),
+                available_tools=build_stub_registry(1).specs(),
+                prior_results=[],
+                step=0,
+                run_id="run_timeout",
             )
 
 

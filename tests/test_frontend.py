@@ -32,6 +32,8 @@ def test_frontend_serves_explicit_inspector_controls_and_local_markdown_renderer
     assert 'font-family: "Segoe UI Variable Text"' in styles
     assert "font-size: 0.98rem" in styles
     assert "@media (prefers-reduced-motion: reduce)" in styles
+    assert "[hidden]" in styles
+    assert "display: none !important" in styles
     assert 'aria-label="Research question"' in html
     assert 'id="demo-badge" class="demo-badge" hidden' in html
     assert 'id="demo-notice" class="notice" hidden' in html
@@ -46,6 +48,7 @@ def test_frontend_connects_markdown_to_stored_and_streamed_assistant_messages() 
     assert 'event.key === "Escape"' in script
     assert 'event === "plan_created" || event === "plan_updated"' in script
     assert 'event === "plan_step_updated"' in script
+    assert 'event === "tool_blocked"' in script
     assert "renderPlan(run.plan)" in script
     assert 'fetch("/api/health")' in script
     assert 'data.is_stub ? "STUB" : "LIVE"' in script

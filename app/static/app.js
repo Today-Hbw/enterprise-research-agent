@@ -272,6 +272,13 @@ function handleEvent(payload, assistantNode) {
     const toolMode = data.is_stub ? "STUB" : "LIVE";
     addTrace(`${data.tool_name} · complete`, data.summary, "tool", `${data.duration_ms}ms · ${toolMode}`);
     addSources(data.sources);
+  } else if (event === "tool_blocked") {
+    addTrace(
+      `${data.tool_name} · blocked`,
+      data.reason || data.summary,
+      "tool",
+      `${data.call_id} · POLICY`,
+    );
   } else if (event === "assistant_delta") {
     assistantNode.classList.remove("thinking");
     renderAssistantMarkdown(assistantNode, data.content);

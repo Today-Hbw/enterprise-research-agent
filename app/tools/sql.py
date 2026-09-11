@@ -49,8 +49,28 @@ class PostgresBackend:
     max_rows: int
     audit_events: list[SqlAuditEvent] = field(default_factory=list)
 
+    @staticmethod
+    def _filter_schema_tables(query: str, tables: list[SchemaTable]) -> list[SchemaTable]:
+        terms = {term.lower() for term in re.findall(r"\w+", query, flags=re.UNICODE)}
+        if not terms:
+            return tables
+        return [
+            table
+            for table in tables
+            if any(
+                term
+                in " ".join(
+                    (
+                        table.schema.lower(),
+                        table.name.lower(),
+                        *(column.name.lower() for column in table.columns),
+                    )
+                )
+                for term in terms
+            )
+        ]
+
     async def search_schema(self, query: str) -> list[SchemaTable]:
-        terms = {term.lower() for term in re.findall(r"[a-zA-Z0-9_]+", query)}
         async with await psycopg.AsyncConnection.connect(self.dsn) as connection:
             async with connection.cursor() as cursor:
                 await cursor.execute(
@@ -77,20 +97,7 @@ class PostgresBackend:
         results = [
             SchemaTable(schema, name, tuple(columns)) for (schema, name), columns in tables.items()
         ]
-        if not terms:
-            return results
-        matched = [
-            table
-            for table in results
-            if terms.intersection(
-                {
-                    table.schema.lower(),
-                    table.name.lower(),
-                    *(column.name.lower() for column in table.columns),
-                }
-            )
-        ]
-        return matched or results
+        return self._filter_schema_tables(query, results)
 
     async def execute_readonly(
         self, statement: str, access_context: AccessContext | None
@@ -162,8 +169,10 @@ def validate_readonly_sql(statement: str, allowed_schemas: frozenset[str]) -> ex
 class SchemaSearchTool(BaseTool):
     name = "schema_search"
     description = (
-        "Search approved PostgreSQL schema metadata, including each column's PostgreSQL data "
-        "type. Always use these types before composing execute_sql comparisons."
+        "Search approved PostgreSQL schema metadata for an explicitly requested structured-data "
+        "or database query. Do not use this tool to search policies, procedures, documents, or "
+        "general knowledge; use knowledge_search for those. Always inspect returned column types "
+        "before composing execute_sql comparisons."
     )
     input_schema = {
         "type": "object",
@@ -209,11 +218,16 @@ class SchemaSearchTool(BaseTool):
                 for table in tables
             ]
         }
+        summary = (
+            f"Found {len(tables)} approved schema tables."
+            if tables
+            else "No approved schema matched the query."
+        )
         return ToolResult(
             call_id=call.call_id,
             tool_name=self.name,
             success=True,
-            summary=f"Found {len(tables)} approved schema tables.",
+            summary=summary,
             data=data,
             sources=[
                 Source(
@@ -221,7 +235,9 @@ class SchemaSearchTool(BaseTool):
                     title="PostgreSQL schema catalog",
                     content_snippet=f"{len(tables)} approved tables retrieved.",
                 )
-            ],
+            ]
+            if tables
+            else [],
         )
 
 

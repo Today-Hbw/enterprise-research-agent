@@ -27,6 +27,7 @@ from app.knowledge import (
     KnowledgeService,
     QdrantKnowledgeBackend,
 )
+from app.logging_utils import configure_logging, settings_secret_values
 from app.models import (
     AccessContext,
     ChatRequest,
@@ -194,10 +195,9 @@ runtime = AgentRuntime(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
+    configure_logging(
+        level=settings.log_level,
+        secrets=settings_secret_values(settings),
     )
     logger.info(
         "Starting %s (env=%s, provider=%s)",

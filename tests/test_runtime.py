@@ -7,12 +7,11 @@ from app.agent.runtime import AgentRuntime
 from app.config import Settings
 from app.models import (
     AgentDecision,
+    Message,
+    MessageRole,
     PlanStepStatus,
     RunStatus,
-    Source,
-    SourceType,
     ToolCall,
-    ToolResult,
 )
 from app.store import InMemoryStore
 from app.tools.stubs import build_stub_registry
@@ -296,6 +295,39 @@ async def test_runtime_passes_new_user_message_when_store_returns_detached_objec
     assert [message.content for message in provider.history] == ["live query"]
 
 
+@pytest.mark.asyncio
+async def test_runtime_excludes_trailing_user_messages_left_by_failed_runs() -> None:
+    memory = InMemoryStore()
+    conversation = await memory.get_or_create_conversation(
+        None, "failed", "demo", {"demo-user"}
+    )
+    await memory.add_message(
+        conversation.conversation_id,
+        Message(role=MessageRole.USER, content="failed request one"),
+    )
+    await memory.add_message(
+        conversation.conversation_id,
+        Message(role=MessageRole.USER, content="failed request two"),
+    )
+    provider = CapturingProvider()
+    runtime = AgentRuntime(
+        settings=Settings(max_steps=2, run_timeout_seconds=5, tool_timeout_seconds=1),
+        provider=provider,
+        registry=build_stub_registry(1),
+        store=memory,
+    )
+
+    events = [
+        event
+        async for event in runtime.stream(
+            query="fresh request", conversation_id=conversation.conversation_id
+        )
+    ]
+
+    assert events[-1].event == "run_completed"
+    assert [message.content for message in provider.history] == ["fresh request"]
+
+
 class EvidenceThenSynthesisProvider(LLMProvider):
     name = "evidence-then-synthesis-provider"
 
@@ -313,16 +345,16 @@ class EvidenceThenSynthesisProvider(LLMProvider):
                 ],
                 decision_summary="Collect evidence.",
             )
-        if not available:
-            return AgentDecision(final_answer="Enough evidence.", decision_summary="Synthesize.")
-        return AgentDecision(
-            tool_calls=[ToolCall(name="schema_search", arguments={"query": "unneeded"})],
-            decision_summary="Keep exploring.",
-        )
+        if len(kwargs["prior_results"]) == 2:
+            return AgentDecision(
+                tool_calls=[ToolCall(name="knowledge_search", arguments={"query": "more"})],
+                decision_summary="Search the relevant knowledge base.",
+            )
+        return AgentDecision(final_answer="Enough evidence.", decision_summary="Synthesize.")
 
 
 @pytest.mark.asyncio
-async def test_live_runtime_forces_synthesis_after_sufficient_evidence() -> None:
+async def test_live_runtime_keeps_tools_available_until_model_synthesizes() -> None:
     provider = EvidenceThenSynthesisProvider()
     memory = InMemoryStore()
     runtime = AgentRuntime(
@@ -337,94 +369,11 @@ async def test_live_runtime_forces_synthesis_after_sufficient_evidence() -> None
 
     assert events[-1].event == "run_completed"
     assert run is not None
-    assert run.metrics.tool_call_count == 2
+    assert run.metrics.tool_call_count == 3
     assert provider.available_tool_names[0]
-    assert provider.available_tool_names[1] == []
-
-
-class SynthesisPolicyIgnoringProvider(LLMProvider):
-    name = "synthesis-policy-ignoring-provider"
-
-    async def decide(self, **kwargs) -> AgentDecision:
-        results = kwargs["prior_results"]
-        if not results:
-            return AgentDecision(
-                tool_calls=[
-                    ToolCall(name="web_search", arguments={"query": "policy"}),
-                    ToolCall(name="knowledge_search", arguments={"query": "policy"}),
-                ],
-                decision_summary="Collect evidence.",
-            )
-        if results[-1].summary.startswith("Tool call blocked"):
-            return AgentDecision(final_answer="Synthesized.", decision_summary="Synthesize.")
-        return AgentDecision(
-            tool_calls=[ToolCall(name="knowledge_search", arguments={"query": "more"})],
-            decision_summary="Incorrectly request another tool.",
-        )
-
-
-@pytest.mark.asyncio
-async def test_runtime_recovers_when_provider_ignores_forced_synthesis_once() -> None:
-    memory = InMemoryStore()
-    runtime = AgentRuntime(
-        settings=Settings(max_steps=8, run_timeout_seconds=5, tool_timeout_seconds=1),
-        provider=SynthesisPolicyIgnoringProvider(),
-        registry=build_stub_registry(1),
-        store=memory,
-    )
-
-    events = [event async for event in runtime.stream(query="成都参保资料", conversation_id=None)]
-    run = await memory.get_run(events[-1].run_id)
-
-    assert events[-1].event == "run_completed"
-    assert run is not None
-    assert run.final_answer == "Synthesized."
-    assert run.metrics.tool_call_count == 2
-
-
-def test_sql_intent_requires_nonempty_sql_before_forcing_synthesis() -> None:
-    knowledge_result = ToolResult(
-        call_id="knowledge",
-        tool_name="knowledge_search",
-        success=True,
-        summary="Found policy.",
-        sources=[
-            Source(
-                source_type=SourceType.DOCUMENT,
-                title=f"Document {index}",
-                document_id=f"doc-{index}",
-                content_snippet="Evidence",
-            )
-            for index in range(3)
-        ],
-    )
-    empty_sql_result = ToolResult(
-        call_id="sql-empty",
-        tool_name="execute_sql",
-        success=True,
-        summary="No rows.",
-        data={"rows": []},
-    )
-    nonempty_sql_result = empty_sql_result.model_copy(
-        update={
-            "call_id": "sql-result",
-            "data": {"rows": [[1]]},
-            "sources": [
-                Source(
-                    source_type=SourceType.SQL,
-                    title="Query result",
-                    content_snippet="One row.",
-                )
-            ],
-        }
-    )
-
-    assert not AgentRuntime._has_sufficient_evidence(
-        "统计成都参保人数", [knowledge_result, empty_sql_result]
-    )
-    assert AgentRuntime._has_sufficient_evidence(
-        "统计成都参保人数", [knowledge_result, nonempty_sql_result]
-    )
+    assert provider.available_tool_names[1]
+    assert provider.available_tool_names[2]
+    assert not any(event.event == "tool_blocked" for event in events)
 
 
 def test_failed_web_search_and_repeated_empty_sql_are_removed_from_catalog() -> None:
@@ -433,9 +382,51 @@ def test_failed_web_search_and_repeated_empty_sql_are_removed_from_catalog() -> 
         tool_call_counts=Counter(),
         tool_failure_counts=Counter({"web_search": 1}),
         empty_sql_results=2,
-        force_synthesis=False,
     )
     names = {spec.name for spec in available}
 
     assert "web_search" not in names
     assert "execute_sql" not in names
+
+
+class ToolLimitIgnoringProvider(LLMProvider):
+    name = "tool-limit-ignoring-provider"
+
+    async def decide(self, **kwargs) -> AgentDecision:
+        result_count = len(kwargs["prior_results"])
+        if result_count == 0:
+            return AgentDecision(
+                tool_calls=[ToolCall(name="web_search", arguments={"query": "first"})],
+                decision_summary="Run the first search.",
+            )
+        if result_count == 1:
+            return AgentDecision(
+                tool_calls=[
+                    ToolCall(name="web_search", arguments={"query": "second"}),
+                    ToolCall(name="web_search", arguments={"query": "third"}),
+                ],
+                decision_summary="Request more searches than the remaining quota.",
+            )
+        return AgentDecision(final_answer="Done.", decision_summary="Synthesize.")
+
+
+@pytest.mark.asyncio
+async def test_runtime_enforces_remaining_tool_quota_before_execution() -> None:
+    memory = InMemoryStore()
+    runtime = AgentRuntime(
+        settings=Settings(max_steps=8, run_timeout_seconds=5, tool_timeout_seconds=1),
+        provider=ToolLimitIgnoringProvider(),
+        registry=build_stub_registry(1),
+        store=memory,
+    )
+
+    events = [event async for event in runtime.stream(query="quota", conversation_id=None)]
+    run = await memory.get_run(events[-1].run_id)
+
+    assert events[-1].event == "run_completed"
+    assert run is not None
+    assert run.metrics.tool_call_count == 2
+    blocked = [event for event in events if event.event == "tool_blocked"]
+    assert len(blocked) == 1
+    assert blocked[0].data["tool_name"] == "web_search"
+    assert "limit has been reached" in blocked[0].data["reason"]

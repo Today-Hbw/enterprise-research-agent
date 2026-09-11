@@ -8,6 +8,7 @@ from time import perf_counter
 
 from app.agent.provider import LLMProvider
 from app.config import Settings
+from app.logging_utils import log_json
 from app.models import (
     AccessContext,
     Message,
@@ -54,20 +55,6 @@ class AgentRuntime:
         "knowledge_search": 2,
         "python_execute": 2,
     }
-    _SQL_INTENT_TOKENS = (
-        "sql",
-        "数据库",
-        "数据分析",
-        "统计",
-        "报表",
-        "总计",
-        "合计",
-        "平均",
-        "趋势",
-        "占比",
-        "同比",
-        "环比",
-    )
     _PLAN_COPY = {
         "knowledge_search": (
             "Search internal knowledge",
@@ -133,8 +120,19 @@ class AgentRuntime:
             access_context.tenant_id,
             access_context.principal_ids,
         )
+        completed_history = list(conversation.messages)
+        ignored_failed_messages = 0
+        while completed_history and completed_history[-1].role == MessageRole.USER:
+            completed_history.pop()
+            ignored_failed_messages += 1
+        if ignored_failed_messages:
+            logger.info(
+                "Conversation %s ignored %d trailing user message(s) from failed runs",
+                conversation.conversation_id,
+                ignored_failed_messages,
+            )
         user_message = Message(role=MessageRole.USER, content=query)
-        history = [*conversation.messages, user_message]
+        history = [*completed_history, user_message]
         await self.store.add_message(conversation.conversation_id, user_message)
 
         run = RunRecord(
@@ -150,12 +148,18 @@ class AgentRuntime:
         )
         await self.store.save_run(run)
         logger.info(
-            "Run started: run_id=%s, conversation_id=%s, tenant=%s, model=%s, query_length=%d",
+            "Run started: run_id=%s, conversation_id=%s, model=%s, input=%s",
             run.run_id,
             run.conversation_id,
-            run.tenant_id,
             run.model,
-            len(query),
+            log_json(
+                {
+                    "query": query,
+                    "tenant_id": run.tenant_id,
+                    "principal_ids": sorted(run.principal_ids),
+                    "history": [message.model_dump(mode="json") for message in history],
+                }
+            ),
         )
         sequence = 0
 
@@ -243,40 +247,38 @@ class AgentRuntime:
         tool_call_counts: Counter[str] = Counter()
         tool_failure_counts: Counter[str] = Counter()
         empty_sql_results = 0
-        synthesis_forced = False
         blocked_synthesis_rounds = 0
 
         for step_index in range(self.settings.max_steps):
             self._enforce_budget(run)
-            if not self.provider.is_demo:
-                if self._has_sufficient_evidence(run.user_query, prior_results):
-                    synthesis_forced = True
-                elif self._query_requires_sql(run.user_query) and (
-                    empty_sql_results >= 2
-                    or tool_failure_counts["execute_sql"]
-                    >= self._TOOL_FAILURE_LIMITS["execute_sql"]
-                ):
-                    synthesis_forced = True
             available_tools = self._available_tools(
                 tool_call_counts=tool_call_counts,
                 tool_failure_counts=tool_failure_counts,
                 empty_sql_results=empty_sql_results,
-                force_synthesis=synthesis_forced,
             )
-            if not available_tools and not synthesis_forced:
-                synthesis_forced = True
+            synthesis_forced = not available_tools
+            if synthesis_forced:
                 logger.info(
-                    "Run %s has no eligible tools remaining; forcing synthesis at step %d",
+                    "Run %s has no eligible tools remaining; requesting final synthesis at step %d",
                     run.run_id,
-                    step_index,
-                )
-            elif synthesis_forced:
-                logger.info(
-                    "Run %s evidence collection policy requires synthesis at step %d",
-                    run.run_id,
-                    step_index,
+                    step_index + 1,
                 )
             decision_started = perf_counter()
+            logger.info(
+                "Run %s LLM input (step=%d): %s",
+                run.run_id,
+                step_index + 1,
+                log_json(
+                    {
+                        "query": run.user_query,
+                        "available_tools": [spec.name for spec in available_tools],
+                        "prior_results": [
+                            result.model_dump(mode="json") for result in prior_results
+                        ],
+                        "force_synthesis": synthesis_forced,
+                    }
+                ),
+            )
             decision = await self.provider.decide(
                 query=run.user_query,
                 history=history,
@@ -292,12 +294,14 @@ class AgentRuntime:
             run.metrics.token_usage += decision.input_tokens + decision.output_tokens
             self._update_estimated_cost(run)
             logger.info(
-                "Run %s LLM decision (step=%d): %d input tokens, %d output tokens, %dms",
+                "Run %s LLM decision (step=%d): %d input tokens, %d output tokens, %dms, "
+                "output=%s",
                 run.run_id,
-                step_index,
+                step_index + 1,
                 decision.input_tokens,
                 decision.output_tokens,
                 decision_duration_ms,
+                log_json(decision.model_dump(mode="json")),
             )
             run.trace.append(
                 TraceStep(
@@ -327,43 +331,171 @@ class AgentRuntime:
                 run.final_answer = decision.final_answer
                 run.status = RunStatus.COMPLETED
                 run.sources = self._deduplicate_sources(prior_results)
+                logger.info(
+                    "Run %s final output: %s",
+                    run.run_id,
+                    log_json(
+                        {
+                            "answer": run.final_answer,
+                            "sources": [
+                                source.model_dump(mode="json") for source in run.sources
+                            ],
+                        }
+                    ),
+                )
                 yield event_factory("assistant_delta", content=decision.final_answer)
                 return
 
             if synthesis_forced:
                 blocked_synthesis_rounds += 1
                 logger.warning(
-                    "Run %s provider returned %d tool call(s) while synthesis was forced; "
+                    "Run %s provider returned %d tool call(s) when no eligible tools remained; "
                     "returning policy-blocked outputs",
                     run.run_id,
                     len(decision.tool_calls),
                 )
                 if blocked_synthesis_rounds > 1:
                     raise RuntimeError(
-                        "Model repeatedly requested tools after server policy required synthesis"
+                        "Model repeatedly requested tools after all eligible tools were exhausted"
                     )
-                prior_results.extend(
+                blocked_results = [
                     ToolResult(
                         call_id=call.call_id,
                         tool_name=call.name,
                         success=False,
-                        summary="Tool call blocked because evidence collection is complete.",
+                        summary="Tool call blocked because no eligible tools remain.",
                         error=(
-                            "Server policy requires the model to synthesize the final answer now."
+                            "Server safety limits require the model to synthesize the final answer."
                         ),
                     )
                     for call in decision.tool_calls
-                )
+                ]
+                prior_results.extend(blocked_results)
+                for call, result in zip(
+                    decision.tool_calls, blocked_results, strict=True
+                ):
+                    logger.info(
+                        "Run %s tool %s blocked: call_id=%s, input=%s, output=%s",
+                        run.run_id,
+                        call.name,
+                        call.call_id,
+                        log_json(call.arguments),
+                        log_json(result.model_dump(mode="json")),
+                    )
+                    run.trace.append(
+                        TraceStep(
+                            index=len(run.trace),
+                            kind="tool_policy_block",
+                            summary=result.summary,
+                            tool_name=call.name,
+                            tool_input=call.arguments,
+                            tool_output_summary=result.summary,
+                            status="blocked",
+                            error=result.error,
+                        )
+                    )
+                    yield event_factory(
+                        "tool_blocked",
+                        call_id=call.call_id,
+                        tool_name=call.name,
+                        input=call.arguments,
+                        summary=result.summary,
+                        reason=result.error,
+                    )
+                await self.store.save_run(run)
                 continue
 
-            fresh_calls = [
+            repeated_calls = [
+                call for call in decision.tool_calls if call.signature in call_signatures
+            ]
+            candidate_calls = [
                 call for call in decision.tool_calls if call.signature not in call_signatures
             ]
-            if not fresh_calls:
+            if not candidate_calls:
                 logger.warning(
                     "Run %s: repeated tool call detected at step %d", run.run_id, step_index
                 )
                 raise RuntimeError("Repeated tool call detected; agent stopped to prevent a loop")
+
+            eligible_names = {spec.name for spec in available_tools}
+            accepted_by_tool: Counter[str] = Counter()
+            fresh_calls: list[ToolCall] = []
+            blocked_calls: list[tuple[ToolCall, ToolResult]] = []
+            for call in repeated_calls:
+                blocked_calls.append(
+                    (
+                        call,
+                        ToolResult(
+                            call_id=call.call_id,
+                            tool_name=call.name,
+                            success=False,
+                            summary="Repeated tool call was not executed.",
+                            error="The same tool request already ran during this agent run.",
+                        ),
+                    )
+                )
+            for call in candidate_calls:
+                call_limit = self._TOOL_CALL_LIMITS.get(call.name, 3)
+                remaining_calls = max(0, call_limit - tool_call_counts[call.name])
+                if (
+                    call.name not in eligible_names
+                    or accepted_by_tool[call.name] >= remaining_calls
+                ):
+                    blocked_calls.append(
+                        (
+                            call,
+                            ToolResult(
+                                call_id=call.call_id,
+                                tool_name=call.name,
+                                success=False,
+                                summary="Tool call was not eligible for execution.",
+                                error=(
+                                    "The tool is unavailable at this step because its call, "
+                                    "failure, "
+                                    "or result limit has been reached."
+                                ),
+                            ),
+                        )
+                    )
+                    continue
+                accepted_by_tool[call.name] += 1
+                fresh_calls.append(call)
+
+            if blocked_calls:
+                prior_results.extend(result for _, result in blocked_calls)
+                for call, result in blocked_calls:
+                    logger.info(
+                        "Run %s tool %s blocked: call_id=%s, input=%s, output=%s",
+                        run.run_id,
+                        call.name,
+                        call.call_id,
+                        log_json(call.arguments),
+                        log_json(result.model_dump(mode="json")),
+                    )
+                    run.trace.append(
+                        TraceStep(
+                            index=len(run.trace),
+                            kind="tool_policy_block",
+                            summary=result.summary,
+                            tool_name=call.name,
+                            tool_input=call.arguments,
+                            tool_output_summary=result.summary,
+                            status="blocked",
+                            error=result.error,
+                        )
+                    )
+                    yield event_factory(
+                        "tool_blocked",
+                        call_id=call.call_id,
+                        tool_name=call.name,
+                        input=call.arguments,
+                        summary=result.summary,
+                        reason=result.error,
+                    )
+                await self.store.save_run(run)
+
+            if not fresh_calls:
+                continue
             for call in fresh_calls:
                 call_signatures.add(call.signature)
             logger.debug(
@@ -392,6 +524,13 @@ class AgentRuntime:
             await self.store.save_run(run)
 
             for call, plan_step in zip(fresh_calls, running_steps, strict=True):
+                logger.info(
+                    "Run %s tool %s input: call_id=%s, input=%s",
+                    run.run_id,
+                    call.name,
+                    call.call_id,
+                    log_json(call.arguments),
+                )
                 yield event_factory("plan_step_updated", step=plan_step.model_dump(mode="json"))
                 yield event_factory(
                     "tool_started",
@@ -417,11 +556,13 @@ class AgentRuntime:
                     )
                 run.metrics.tool_call_count += 1
                 logger.info(
-                    "Run %s tool %s: %s in %dms",
+                    "Run %s tool %s output: call_id=%s, status=%s, duration_ms=%d, output=%s",
                     run.run_id,
                     call.name,
+                    call.call_id,
                     "completed" if result.success else "failed",
                     duration_ms,
+                    log_json(result.model_dump(mode="json")),
                 )
                 run.trace.append(
                     TraceStep(
@@ -463,10 +604,7 @@ class AgentRuntime:
         tool_call_counts: Counter[str],
         tool_failure_counts: Counter[str],
         empty_sql_results: int,
-        force_synthesis: bool,
     ):
-        if force_synthesis:
-            return []
         available = []
         for spec in self.registry.specs():
             call_limit = self._TOOL_CALL_LIMITS.get(spec.name, 3)
@@ -479,45 +617,6 @@ class AgentRuntime:
                 continue
             available.append(spec)
         return available
-
-    @classmethod
-    def _has_sufficient_evidence(
-        cls, query: str, results: list[ToolResult]
-    ) -> bool:
-        usable_results = []
-        anchors: set[tuple[object, ...]] = set()
-        has_nonempty_sql = False
-        for result in results:
-            if not result.success:
-                continue
-            if result.tool_name == "execute_sql":
-                rows = result.data.get("rows")
-                if isinstance(rows, list) and rows:
-                    has_nonempty_sql = True
-                else:
-                    continue
-            if not result.sources:
-                continue
-            usable_results.append(result)
-            for source in result.sources:
-                anchors.add(
-                    (
-                        source.source_type,
-                        source.url,
-                        source.document_id,
-                        source.chunk_id,
-                        source.title,
-                    )
-                )
-
-        if cls._query_requires_sql(query):
-            return has_nonempty_sql
-        return len(anchors) >= 3 or len(usable_results) >= 2
-
-    @classmethod
-    def _query_requires_sql(cls, query: str) -> bool:
-        normalized_query = query.lower()
-        return any(token in normalized_query for token in cls._SQL_INTENT_TOKENS)
 
     def _sync_plan(self, run: RunRecord, calls: list[ToolCall]) -> str | None:
         created = not run.plan

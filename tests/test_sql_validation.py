@@ -8,12 +8,25 @@ import pytest
 from app.models import ToolCall
 from app.tools.sql import (
     ExecuteSqlTool,
+    PostgresBackend,
     SchemaColumn,
     SchemaSearchTool,
     SchemaTable,
     SqlValidationError,
     validate_readonly_sql,
 )
+
+
+def test_schema_filter_supports_unicode_and_does_not_fall_back_to_all_tables() -> None:
+    table = SchemaTable(
+        schema="public",
+        name="rag_api_document",
+        columns=(SchemaColumn("document_id", "character varying", "varchar", False),),
+    )
+
+    assert PostgresBackend._filter_schema_tables("document", [table]) == [table]
+    assert PostgresBackend._filter_schema_tables("参保", [table]) == []
+    assert PostgresBackend._filter_schema_tables("***", [table]) == [table]
 
 
 @pytest.mark.parametrize(
