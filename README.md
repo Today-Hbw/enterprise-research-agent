@@ -17,6 +17,16 @@ The project runs in deterministic offline mode by default. No API key or externa
 - **Opt-in integrations:** external capabilities stay disabled until enabled through server configuration, host allowlists, or read-only credentials.
 - **Built-in evaluation and UI:** run offline Agent/Retrieval evaluations and inspect conversations, plans, sources, traces, and metrics in a responsive three-panel interface.
 
+## Demo
+
+Live runtime with most capabilities connected:
+
+![Enterprise Research Agent live runtime](docs/assets/page-demo.png)
+
+Deterministic offline demo mode:
+
+![Enterprise Research Agent demo mode](docs/assets/page-init-demo.png)
+
 ## Capability Matrix
 
 | Capability | Default | Optional live backend |
